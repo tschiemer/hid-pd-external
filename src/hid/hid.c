@@ -7,6 +7,9 @@
 #include <wchar.h>
 #include <assert.h>
 #include <math.h>
+#include <signal.h>
+#include <time.h>
+#include <pthread.h>
 
 #define UNUSED(x) (void)(x)
 
@@ -37,6 +40,10 @@ typedef struct {
     hid_device_t * hiddev;
     libusb_device_handle * handle;
 
+    uint8_t report_id;
+
+    volatile int poll_ms;
+    pthread_t polling_thread;
 
 //    t_inlet *in;
 //    t_outlet *dbg_out;
@@ -51,9 +58,6 @@ static void * hid_new();
 static void hid_free(hid_t *hid);
 
 //static void hid_anything(hid_t *hid, t_symbol *s, int argc, t_atom *argv);
-//void midimessage_gen_anything(t_midimessage_gen *self, t_symbol *s, int argc, t_atom *argv);
-//void midimessage_gen_generatorError(int code, uint8_t argc, uint8_t ** argv);
-
 
 static void hid_cmd_list(hid_t *hid, t_symbol *s, int argc, t_atom *argv);
 static void hid_cmd_open(hid_t *hid, t_symbol *s, int argc, t_atom *argv);
@@ -61,6 +65,8 @@ static void hid_cmd_close(hid_t *hid, t_symbol *s, int argc, t_atom *argv);
 
 static void hid_cmd_bang(hid_t *hid);
 static void hid_cmd_poll(hid_t *hid, t_symbol *s, int argc, t_atom *argv);
+
+static void hid_cmd_report_id(hid_t *hid, t_symbol *s, int argc, t_atom *argv);
 
 static int hid_get_device_list(hid_t *hid, hid_device_t ***hiddevs, uint16_t vendor, uint16_t product, char * serial, uint8_t usage_page, uint8_t usage, uint8_t max);
 static int hid_filter_device_list(libusb_device **devs, ssize_t count, hid_device_t ***hiddevs, uint16_t vendor, uint16_t product, char * serial, uint8_t usage_page, uint8_t usage, uint8_t max);
@@ -87,6 +93,8 @@ void hid_setup(void) {
 
     class_addbang(hid_class, hid_cmd_bang);
     class_addmethod(hid_class, (t_method)hid_cmd_poll, gensym("poll"), A_GIMME, 0);
+
+    class_addmethod(hid_class, (t_method)hid_cmd_report_id, gensym("report_id"), A_GIMME, 0);
 }
 
 
@@ -576,6 +584,9 @@ static void hid_cmd_open(hid_t *hid, t_symbol *s, int argc, t_atom *argv)
     }
 
 
+    hid->poll_ms = 0;
+    hid->report_id = 0;
+
     int r = libusb_open(hiddevs[0]->dev, &hid->handle);
     if (r < 0){
         error("failed to open");
@@ -615,6 +626,24 @@ static void hid_cmd_close(hid_t *hid, t_symbol *s, int argc, t_atom *argv)
 }
 
 
+static int hid_get_input_report(hid_t * hid, uint8_t report_id, uint8_t *data, size_t count)
+{
+    int res = -1;
+
+    res = libusb_control_transfer(hid->handle,
+                                  LIBUSB_REQUEST_TYPE_CLASS|LIBUSB_RECIPIENT_INTERFACE|LIBUSB_ENDPOINT_IN,
+                                  0x01/*HID get_report*/,
+                                  (1/*HID Input*/ << 8) | report_id,
+                                  hid->hiddev->interface_num,
+                                  data, count,
+                                  1000/*timeout millis*/);
+
+    if (res < 0)
+        return -1;
+
+    return res;
+}
+
 static void hid_cmd_bang(hid_t *hid)
 {
     if (!hid->handle){
@@ -622,7 +651,39 @@ static void hid_cmd_bang(hid_t *hid)
         return;
     }
 
-    post("bang");
+//    post("bang");
+
+    uint8_t data[128];
+
+    ssize_t r = hid_get_input_report(hid, hid->report_id, data, sizeof(data));
+
+
+    post("got report? %d", r);
+
+    if (r > 0){
+    }
+}
+
+
+static void * polling_thread_handler(void * ptr) {
+
+    hid_t * hid = ptr;
+
+    uint8_t data[128];
+    ssize_t r;
+
+    while(hid->poll_ms){
+
+        r = hid_get_input_report(hid, hid->report_id, data, sizeof(data));
+
+        if (r > 0){
+            post("got report!");
+        }
+
+        usleep(1000*hid->poll_ms);
+    }
+
+    return NULL;
 }
 
 static void hid_cmd_poll(hid_t *hid, t_symbol *s, int argc, t_atom *argv)
@@ -641,11 +702,47 @@ static void hid_cmd_poll(hid_t *hid, t_symbol *s, int argc, t_atom *argv)
 
     t_float p = atom_getfloat(argv);
 
-    if (p < 0.0){
-        error("must be integer >= 0");
+    if (p < 0.0 || 1000.0 < p || fmod(p, 1.0) != 0.0){
+        error("must be integer >= 0 <= 1000");
         return;
     }
 
-    post("poll");
+    uint32_t poll_ms = p;
 
+    if (hid->poll_ms && poll_ms == 0){
+        hid->poll_ms = 0;
+        pthread_join(hid->polling_thread, NULL);
+    }
+
+    // do nothing else if polling should stop
+    if (poll_ms == 0){
+        return;
+    }
+
+    hid->poll_ms = poll_ms;
+
+    int r = pthread_create(&hid->polling_thread, NULL, polling_thread_handler, hid);
+
+    if (r){
+        error("pthread_create(): %d", r);
+        hid->poll_ms = 0;
+        return;
+    }
+}
+
+static void hid_cmd_report_id(hid_t *hid, t_symbol *s, int argc, t_atom *argv)
+{
+    UNUSED(s);
+
+    if (argc == 0){
+        // do nothing
+    } else if (argc == 1){
+        hid->report_id = atom_getfloat(argv);
+    } else {
+        error("invalid argument count");
+    }
+
+    t_atom atom_report_id;
+    SETFLOAT(&atom_report_id, hid->report_id);
+    outlet_anything(hid->out, gensym("report_id"), 1, &atom_report_id);
 }
