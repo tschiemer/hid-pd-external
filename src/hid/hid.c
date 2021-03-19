@@ -46,11 +46,17 @@ static void hid_free(hid_t *hid);
 //void midimessage_gen_anything(t_midimessage_gen *self, t_symbol *s, int argc, t_atom *argv);
 //void midimessage_gen_generatorError(int code, uint8_t argc, uint8_t ** argv);
 
+
 static void hid_cmd_list(hid_t *hid, t_symbol *s, int argc, t_atom *argv);
+static void hid_cmd_open(hid_t *hid, t_symbol *s, int argc, t_atom *argv);
+static void hid_cmd_close(hid_t *hid, t_symbol *s, int argc, t_atom *argv);
+
 
 static int hid_get_device_list(hid_t *hid, hid_device_t ***hiddevs, uint16_t vendor, uint16_t product, char * serial, uint8_t usage_page, uint8_t usage, uint8_t max);
 static int hid_filter_device_list(libusb_device **devs, ssize_t count, hid_device_t ***hiddevs, uint16_t vendor, uint16_t product, char * serial, uint8_t usage_page, uint8_t usage, uint8_t max);
 static void hid_free_device_list(hid_device_t ** hiddevs);
+
+static char *get_usb_string(libusb_device_handle *dev, uint8_t idx);
 
 
 /**
@@ -130,16 +136,6 @@ static char *get_usb_string(libusb_device_handle *dev, uint8_t idx)
     int len;
     char *str = NULL;
 
-//#if !defined(__ANDROID__) && !defined(NO_ICONV) /* we don't use iconv on Android, or when it is explicitly disabled */
-//    wchar_t wbuf[256];
-//    /* iconv variables */
-//    iconv_t ic;
-//    size_t inbytes;
-//    size_t outbytes;
-//    size_t res;
-//    char *inptr;
-//    char *outptr;
-//#endif
 
     /* Determine which language to use. */
     uint16_t lang = 0;
@@ -156,18 +152,6 @@ static char *get_usb_string(libusb_device_handle *dev, uint8_t idx)
     if (len < 0)
         return NULL;
 
-//#if defined(__ANDROID__) || defined(NO_ICONV)
-
-    /* Bionic does not have iconv support nor wcsdup() function, so it
-	   has to be done manually.  The following code will only work for
-	   code points that can be represented as a single UTF-16 character,
-	   and will incorrectly convert any code points which require more
-	   than one UTF-16 character.
-
-	   Skip over the first character (2-bytes).  */
-//    for (int i = 0; i < len / 2; i++){
-//        post("%02x %02x", buf[i*2 + 3], buf[i * 2 + 2]);
-//    }
 	len -= 2;
 	str = (char*) malloc((len / 2 + 1) * sizeof(wchar_t));
 	int i;
@@ -176,61 +160,10 @@ static char *get_usb_string(libusb_device_handle *dev, uint8_t idx)
 	}
 	str[len / 2] = 0x00000000;
 
-//#else
-//
-//    /* buf does not need to be explicitly NULL-terminated because
-//       it is only passed into iconv() which does not need it. */
-//
-//    /* Initialize iconv. */
-//    ic = iconv_open("WCHAR_T", "UTF-16LE");
-//    if (ic == (iconv_t)-1) {
-//        LOG("iconv_open() failed\n");
-//        return NULL;
-//    }
-//
-//    /* Convert to native wchar_t (UTF-32 on glibc/BSD systems).
-//       Skip the first character (2-bytes). */
-//    inptr = buf+2;
-//    inbytes = len-2;
-//    outptr = (char*) wbuf;
-//    outbytes = sizeof(wbuf);
-//    res = iconv(ic, &inptr, &inbytes, &outptr, &outbytes);
-//    if (res == (size_t)-1) {
-//        LOG("iconv() failed\n");
-//        goto err;
-//    }
-//
-//    /* Write the terminating NULL. */
-//    wbuf[sizeof(wbuf)/sizeof(wbuf[0])-1] = 0x00000000;
-//    if (outbytes >= sizeof(wbuf[0]))
-//        *((wchar_t*)outptr) = 0x00000000;
-//
-//    /* Allocate and copy the string. */
-//    str = wcsdup(wbuf);
-//
-//    err:
-//    iconv_close(ic);
-//
-//#endif
 
     return str;
 }
 
-//
-//static int hid_get_indexed_string(hid_device *dev, int string_index, wchar_t *string, size_t maxlen)
-//{
-//    wchar_t *str;
-//
-//    str = get_usb_string(dev->device_handle, string_index);
-//    if (str) {
-//    wcsncpy(string, str, maxlen);
-//    string[maxlen-1] = L'\0';
-//    free(str);
-//    return 0;
-//    }
-//    else
-//    return -1;
-//}
 
 static int hid_get_device_list(hid_t *hid, hid_device_t ***hiddevs, uint16_t vendor, uint16_t product, char * serial, uint8_t usage_page, uint8_t usage, uint8_t max)
 {
@@ -430,16 +363,25 @@ static void hid_free_device_list(hid_device_t ** hiddevs)
     }
 }
 
-static void hid_cmd_list(hid_t *hid, t_symbol *s, int argc, t_atom *argv)
-{
-    UNUSED(hid);
-    UNUSED(s);
+typedef struct {
+    uint16_t vendor;
+    uint16_t product;
+    char serial[256];
+    char * serialptr;
+    uint8_t usage_page;
+    uint8_t usage;
+} filter_args_t;
 
-    uint16_t vendor = 0;
-    uint16_t product = 0;
-    char serial[256] = "";
-    uint8_t usage_page = 0;
-    uint8_t usage = 0;
+static void get_filter_args(filter_args_t * args, int argc, t_atom *argv)
+{
+    assert(args);
+    assert(argv);
+
+    args->vendor = 0;
+    args->product = 0;
+    args->serialptr = NULL;
+    args->usage_page = 0;
+    args->usage = 0;
 
     if (argc > 0){
         for(int i = 0, inc; i < argc; i += inc){
@@ -461,7 +403,7 @@ static void hid_cmd_list(hid_t *hid, t_symbol *s, int argc, t_atom *argv)
                     error("vendorid must be integer > 0");
                     return;
                 }
-                vendor = f;
+                args->vendor = f;
 
             } else if (strcmp(opt, "productid") == 0){
                 if (i+1 >= argc){
@@ -476,7 +418,8 @@ static void hid_cmd_list(hid_t *hid, t_symbol *s, int argc, t_atom *argv)
                     error("productidid must be integer > 0");
                     return;
                 }
-                product = f;
+                args->product = f;
+
             } else if (strcmp(opt, "serial") == 0){
                 if (i+1 >= argc){
                     error("missing argument");
@@ -484,7 +427,11 @@ static void hid_cmd_list(hid_t *hid, t_symbol *s, int argc, t_atom *argv)
                 }
                 inc = 2;
 
-                atom_string(argv + i + 1, serial, sizeof(serial));
+                atom_string(argv + i + 1, args->serial, sizeof(args->serial));
+
+                if (strlen(args->serial)){
+                    args->serialptr = args->serial;
+                }
 
             } else if (strcmp(opt, "usage_page") == 0){
                 if (i+1 >= argc){
@@ -499,7 +446,7 @@ static void hid_cmd_list(hid_t *hid, t_symbol *s, int argc, t_atom *argv)
                     error("usage_page must be integer > 0");
                     return;
                 }
-                usage_page = f;
+                args->usage_page = f;
             } else if (strcmp(opt, "usage") == 0){
                 if (i+1 >= argc){
                     error("missing argument");
@@ -513,18 +460,18 @@ static void hid_cmd_list(hid_t *hid, t_symbol *s, int argc, t_atom *argv)
                     error("usage must be integer > 0");
                     return;
                 }
-                usage = f;
+                args->usage = f;
             } else if (strcmp(opt, "mouse") == 0) {
                 inc = 1 ;
 
-                usage_page = 1;
-                usage = 2;
+                args->usage_page = 1;
+                args->usage = 2;
 
             } else if (strcmp(opt, "joystick") == 0) {
                 inc = 1 ;
 
-                usage_page = 1;
-                usage = 4;
+                args->usage_page = 1;
+                args->usage = 4;
             }  else {
                 error("Unrecognized option %s", opt);
                 return;
@@ -533,9 +480,18 @@ static void hid_cmd_list(hid_t *hid, t_symbol *s, int argc, t_atom *argv)
             assert(inc > 0); // so you forgot to set inc(rement)
         }
     }
+}
+
+static void hid_cmd_list(hid_t *hid, t_symbol *s, int argc, t_atom *argv)
+{
+    UNUSED(s);
+
+    filter_args_t args;
+
+    get_filter_args(&args, argc, argv);
 
     hid_device_t ** hiddevs;
-    ssize_t cnt = hid_get_device_list(hid, &hiddevs, vendor, product, strlen(serial) ? serial : NULL, usage_page, usage, 0);
+    ssize_t cnt = hid_get_device_list(hid, &hiddevs, args.vendor, args.product, args.serialptr, args.usage_page, args.usage, 0);
 
     if (cnt < 0){
         return;
@@ -574,4 +530,15 @@ static void hid_cmd_list(hid_t *hid, t_symbol *s, int argc, t_atom *argv)
     }
 
     hid_free_device_list(hiddevs);
+}
+
+
+static void hid_cmd_open(hid_t *hid, t_symbol *s, int argc, t_atom *argv)
+{
+    post("open");
+}
+
+static void hid_cmd_close(hid_t *hid, t_symbol *s, int argc, t_atom *argv)
+{
+    post("close");
 }
