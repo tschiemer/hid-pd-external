@@ -4,6 +4,9 @@
 #include "libusb/libusb.h"
 #include <stdlib.h>
 #include <string.h>
+#include <wchar.h>
+#include <assert.h>
+#include <math.h>
 
 #define UNUSED(x) (void)(x)
 
@@ -25,6 +28,11 @@ typedef struct {
     struct libusb_device_descriptor desc;
 //    struct libusb_config_descriptor *config;
     uint8_t interface_num;
+
+    char * serial_string;
+    char * manufacturer_string;
+    char * product_string;
+
     uint8_t report_desc[];
     #define hid_usage_page  report_desc[1]
     #define hid_usage       report_desc[3]
@@ -34,11 +42,16 @@ void hid_setup(void);
 static void * hid_new();
 static void hid_free(hid_t *hid);
 
-static void hid_anything(hid_t *hid, t_symbol *s, int argc, t_atom *argv);
+//static void hid_anything(hid_t *hid, t_symbol *s, int argc, t_atom *argv);
 //void midimessage_gen_anything(t_midimessage_gen *self, t_symbol *s, int argc, t_atom *argv);
 //void midimessage_gen_generatorError(int code, uint8_t argc, uint8_t ** argv);
 
 static void hid_cmd_list(hid_t *hid, t_symbol *s, int argc, t_atom *argv);
+
+static int hid_get_device_list(hid_t *hid, hid_device_t ***hiddevs, uint16_t vendor, uint16_t product, char * serial, uint8_t usage_page, uint8_t usage);
+static int hid_filter_device_list(libusb_device **devs, ssize_t count, hid_device_t ***hiddevs, uint16_t vendor, uint16_t product, char * serial, uint8_t usage_page, uint8_t usage);
+static void hid_free_device_list(hid_device_t ** hiddevs);
+
 
 /**
  * define the function-space of the class
@@ -55,13 +68,13 @@ void hid_setup(void) {
 //    class_addbang(midimessage_gen_class, midimessage_gen_bang);
 
 
-//    class_addmethod(hid_class,
+    class_addmethod(hid_class, (t_method)hid_cmd_list, gensym("list"), A_GIMME, 0);
 //                    (t_method)hid_list
 //                    , gensym("list"), 0);
 
 //    class_addmethod(midi)
-    class_addlist(hid_class, hid_anything);
-    class_addanything(hid_class, hid_anything);
+//    class_addlist(hid_class, hid_anything);
+//    class_addanything(hid_class, hid_anything);
 
 
 }
@@ -98,15 +111,150 @@ static void hid_free(hid_t *hid)
     libusb_exit(hid->context);
 }
 
-static void hid_anything(hid_t *hid, t_symbol *s, int argc, t_atom *argv)
+//static void hid_anything(hid_t *hid, t_symbol *s, int argc, t_atom *argv)
+//{
+//    if (s == gensym("list")){
+//        hid_cmd_list(hid, s, argc, argv);
+//    } else {
+//        error("not a recognized command");
+//    }
+//}
+
+
+/* This function returns a newly allocated wide string containing the USB
+   device string numbered by the index. The returned string must be freed
+   by using free(). */
+static char *get_usb_string(libusb_device_handle *dev, uint8_t idx)
 {
-    if (s == gensym("list")){
-        hid_cmd_list(hid, s, argc, argv);
-    } else {
-        error("not a recognized command");
-    }
+    char buf[512];
+    int len;
+    char *str = NULL;
+
+//#if !defined(__ANDROID__) && !defined(NO_ICONV) /* we don't use iconv on Android, or when it is explicitly disabled */
+//    wchar_t wbuf[256];
+//    /* iconv variables */
+//    iconv_t ic;
+//    size_t inbytes;
+//    size_t outbytes;
+//    size_t res;
+//    char *inptr;
+//    char *outptr;
+//#endif
+
+    /* Determine which language to use. */
+    uint16_t lang = 0;
+//    lang = get_usb_code_for_current_locale();
+//    if (!is_language_supported(dev, lang))
+//        lang = get_first_language(dev);
+
+    /* Get the string from libusb. */
+    len = libusb_get_string_descriptor(dev,
+                                       idx,
+                                       lang,
+                                       (unsigned char*)buf,
+                                       sizeof(buf));
+    if (len < 0)
+        return NULL;
+
+//#if defined(__ANDROID__) || defined(NO_ICONV)
+
+    /* Bionic does not have iconv support nor wcsdup() function, so it
+	   has to be done manually.  The following code will only work for
+	   code points that can be represented as a single UTF-16 character,
+	   and will incorrectly convert any code points which require more
+	   than one UTF-16 character.
+
+	   Skip over the first character (2-bytes).  */
+//    for (int i = 0; i < len / 2; i++){
+//        post("%02x %02x", buf[i*2 + 3], buf[i * 2 + 2]);
+//    }
+	len -= 2;
+	str = (char*) malloc((len / 2 + 1) * sizeof(wchar_t));
+	int i;
+	for (i = 0; i < len / 2; i++) {
+		str[i] = buf[i * 2 + 2];// | (buf[i * 2 + 3] << 8);
+	}
+	str[len / 2] = 0x00000000;
+
+//#else
+//
+//    /* buf does not need to be explicitly NULL-terminated because
+//       it is only passed into iconv() which does not need it. */
+//
+//    /* Initialize iconv. */
+//    ic = iconv_open("WCHAR_T", "UTF-16LE");
+//    if (ic == (iconv_t)-1) {
+//        LOG("iconv_open() failed\n");
+//        return NULL;
+//    }
+//
+//    /* Convert to native wchar_t (UTF-32 on glibc/BSD systems).
+//       Skip the first character (2-bytes). */
+//    inptr = buf+2;
+//    inbytes = len-2;
+//    outptr = (char*) wbuf;
+//    outbytes = sizeof(wbuf);
+//    res = iconv(ic, &inptr, &inbytes, &outptr, &outbytes);
+//    if (res == (size_t)-1) {
+//        LOG("iconv() failed\n");
+//        goto err;
+//    }
+//
+//    /* Write the terminating NULL. */
+//    wbuf[sizeof(wbuf)/sizeof(wbuf[0])-1] = 0x00000000;
+//    if (outbytes >= sizeof(wbuf[0]))
+//        *((wchar_t*)outptr) = 0x00000000;
+//
+//    /* Allocate and copy the string. */
+//    str = wcsdup(wbuf);
+//
+//    err:
+//    iconv_close(ic);
+//
+//#endif
+
+    return str;
 }
 
+//
+//static int hid_get_indexed_string(hid_device *dev, int string_index, wchar_t *string, size_t maxlen)
+//{
+//    wchar_t *str;
+//
+//    str = get_usb_string(dev->device_handle, string_index);
+//    if (str) {
+//    wcsncpy(string, str, maxlen);
+//    string[maxlen-1] = L'\0';
+//    free(str);
+//    return 0;
+//    }
+//    else
+//    return -1;
+//}
+
+static int hid_get_device_list(hid_t *hid, hid_device_t ***hiddevs, uint16_t vendor, uint16_t product, char * serial, uint8_t usage_page, uint8_t usage)
+{
+    libusb_device **devs;
+    ssize_t cnt;
+
+
+    cnt = libusb_get_device_list(hid->context, &devs);
+    if (cnt < 0){
+        error("Failed to get device list: %zd", cnt);
+        return -1;
+    }
+
+    cnt = hid_filter_device_list(devs, cnt, hiddevs, vendor, product, serial, usage_page, usage);
+
+    libusb_free_device_list(devs, 1);
+
+    if (cnt < 0){
+        error("Error during filter operation: %zd", cnt);
+        return -1;
+    }
+
+    return cnt;
+}
 
 static int hid_filter_device_list(libusb_device **devs, ssize_t count, hid_device_t ***hiddevs, uint16_t vendor, uint16_t product, char * serial, uint8_t usage_page, uint8_t usage)
 {
@@ -154,14 +302,14 @@ static int hid_filter_device_list(libusb_device **devs, ssize_t count, hid_devic
 
             for (int l = 0; l < config->interface[k].num_altsetting; l++) {
 
-                if (config->interface[k].altsetting[l].bInterfaceClass != LIBUSB_CLASS_HID){
+                if (config->interface[k].altsetting[l].bInterfaceClass != LIBUSB_CLASS_HID) {
                     continue;
                 }
 
                 libusb_device_handle *handle;
                 r = libusb_open(dev, &handle);
 
-                if (r < 0){
+                if (r < 0) {
                     error("failed to open dev: %d", r);
                     continue;
                 }
@@ -170,42 +318,70 @@ static int hid_filter_device_list(libusb_device **devs, ssize_t count, hid_devic
                 uint8_t interface_num = config->interface[k].altsetting[l].bInterfaceNumber;
 
                 uint8_t report_desc[256];
-                r = libusb_control_transfer(handle, LIBUSB_ENDPOINT_IN|LIBUSB_RECIPIENT_INTERFACE, LIBUSB_REQUEST_GET_DESCRIPTOR, (LIBUSB_DT_REPORT << 8)|interface_num, 0, report_desc, sizeof(report_desc), 5000);
-                if (r < 4){
+                r = libusb_control_transfer(handle, LIBUSB_ENDPOINT_IN | LIBUSB_RECIPIENT_INTERFACE,
+                                            LIBUSB_REQUEST_GET_DESCRIPTOR, (LIBUSB_DT_REPORT << 8) | interface_num, 0,
+                                            report_desc, sizeof(report_desc), 5000);
+                if (r < 4) {
                     error("control_transfer() fail for report descriptor (%04x:%04x): %d", desc.idVendor, desc.idProduct, r);
                 } else if (report_desc[0] != 0x05 || report_desc[2] != 0x09) {
-                    error("Notice: report descriptor not starting with usage page and usage bytes: %02x %02x %02x %02x", report_desc[0], report_desc[1], report_desc[2], report_desc[3]);
-                } else if ((usage_page != 0 && usage_page != report_desc[1]) || (usage != 0 && usage != report_desc[3])) {
+                    error("Notice: report descriptor not starting with usage page and usage bytes: %02x %02x %02x %02x",
+                          report_desc[0], report_desc[1], report_desc[2], report_desc[3]);
+                } else if ((usage_page != 0 && usage_page != report_desc[1]) ||
+                           (usage != 0 && usage != report_desc[3]) ||
+                           (serial != NULL && desc.iSerialNumber == 0)) {
                     // filter out unwanted usages
                     // ie, do nothing
-                } else if (o >= count){
-                    error("Too many HID interfaces, skipping device %04x:%04x usage %d %d", desc.idVendor, desc.idProduct, report_desc[1], report_desc[3]);
+                } else if (o >= count) {
+                    error("Too many HID interfaces, skipping device %04x:%04x usage %d %d", desc.idVendor,
+                          desc.idProduct, report_desc[1], report_desc[3]);
                 } else {
 
-                    hid_device_t * hidDevice = malloc(sizeof(hid_device_t) + r);
+                    char * serial_string = NULL;
 
-                    hidDevice->dev = dev;
-                    libusb_ref_device(dev); // increase reference count
+                    if (desc.iSerialNumber > 0 && (serial_string = get_usb_string(handle, desc.iSerialNumber)) == NULL){
+                        error("failed to load serial for device %04x:%04x", desc.idVendor, desc.idProduct);
+                    } else if (serial != NULL && strcmp(serial, serial_string) != 0){
+                        free(serial_string);
+                    } else {
 
-                    memcpy(&hidDevice->desc, &desc, sizeof(struct libusb_device_descriptor));
+                        hid_device_t * hiddev = calloc(1, sizeof(hid_device_t) + r);
 
-//                    dev->config = NULL;
+                        hiddev->dev = dev;
+                        libusb_ref_device(dev); // increase reference count
 
-                    hidDevice->interface_num = interface_num;
+                        memcpy(&hiddev->desc, &desc, sizeof(struct libusb_device_descriptor));
 
-                    memcpy(hidDevice->report_desc, report_desc, r);
+//                    hiddev->config = config;
+//                    config = NULL;
 
-                    (*hiddevs)[o++] = hidDevice;
+                        hiddev->interface_num = interface_num;
 
-                    post("usage (page) = %d (%d)", report_desc[3], report_desc[1]);
+                        memcpy(hiddev->report_desc, report_desc, r);
 
+                        /* Serial Number */
+                        hiddev->serial_string = serial_string;
+
+                        /* Manufacturer and Product strings */
+                        if (desc.iManufacturer > 0)
+                            hiddev->manufacturer_string =
+                                    get_usb_string(handle, desc.iManufacturer);
+                        if (desc.iProduct > 0)
+                            hiddev->product_string =
+                                    get_usb_string(handle, desc.iProduct);
+
+                        (*hiddevs)[o++] = hiddev;
+
+//                    post("usage (page) = %d (%d)", report_desc[3], report_desc[1]);
+                    }
                 }
 
                 libusb_close(handle);
             }
         }
 
-        libusb_free_config_descriptor(config);
+        if (config != NULL){
+            libusb_free_config_descriptor(config);
+        }
     }
 
     // if not found any devices free list;
@@ -227,10 +403,21 @@ static void hid_free_device_list(hid_device_t ** hiddevs)
     int i = 0;
 
     while( (dev = hiddevs[i++]) != NULL){
-        libusb_unref_device(dev->dev);
-//        if (dev->config != NULL) {
+
+        if (dev->serial_string)
+            free(dev->serial_string);
+
+        if (dev->manufacturer_string)
+            free(dev->manufacturer_string);
+
+        if (dev->product_string)
+            free(dev->product_string);
+//
+//        if (dev->config) {
 //            libusb_free_config_descriptor(dev->config);
 //        }
+
+        libusb_unref_device(dev->dev);
         free(dev);
     }
 }
@@ -239,45 +426,158 @@ static void hid_cmd_list(hid_t *hid, t_symbol *s, int argc, t_atom *argv)
 {
     UNUSED(hid);
     UNUSED(s);
-    UNUSED(argc);
-    UNUSED(argv);
-
-    post("list");
 
     uint16_t vendor = 0;
     uint16_t product = 0;
-    char * serial = NULL;
+    char serial[256] = "";
     uint8_t usage_page = 0;
     uint8_t usage = 0;
 
-    libusb_device **devs;
-    ssize_t cnt;
+    if (argc > 0){
+        for(int i = 0, inc; i < argc; i += inc){
+            char opt[256];
+            inc = 0;
 
-    cnt = libusb_get_device_list(NULL, &devs);
-    if (cnt < 0){
-        error("Failed to get device list: %zd", cnt);
-        return;
+            atom_string(argv + i, opt, sizeof(opt));
+
+            if (strcmp(opt, "vendorid") == 0){
+                if (i+1 >= argc){
+                    error("missing argument");
+                    return;
+                }
+                inc = 2;
+
+                t_float f = atom_getfloat(argv + i + 1);
+
+                if (f <= 0.0 || fmodf(f, 1.0) > 0.0){
+                    error("vendorid must be integer > 0");
+                    return;
+                }
+                vendor = f;
+
+            } else if (strcmp(opt, "productid") == 0){
+                if (i+1 >= argc){
+                    error("missing argument");
+                    return;
+                }
+                inc = 2;
+
+                t_float f = atom_getfloat(argv + i + 1);
+
+                if (f <= 0.0 || fmodf(f, 1.0) > 0.0){
+                    error("productidid must be integer > 0");
+                    return;
+                }
+                product = f;
+            } else if (strcmp(opt, "serial") == 0){
+                if (i+1 >= argc){
+                    error("missing argument");
+                    return;
+                }
+                inc = 2;
+
+                atom_string(argv + i + 1, serial, sizeof(serial));
+
+            } else if (strcmp(opt, "usage_page") == 0){
+                if (i+1 >= argc){
+                    error("missing argument");
+                    return;
+                }
+                inc = 2;
+
+                t_float f = atom_getfloat(argv + i + 1);
+
+                if (f <= 0.0 || fmodf(f, 1.0) > 0.0){
+                    error("usage_page must be integer > 0");
+                    return;
+                }
+                usage_page = f;
+            } else if (strcmp(opt, "usage") == 0){
+                if (i+1 >= argc){
+                    error("missing argument");
+                    return;
+                }
+                inc = 2;
+
+                t_float f = atom_getfloat(argv + i + 1);
+
+                if (f <= 0.0 || fmodf(f, 1.0) > 0.0){
+                    error("usage must be integer > 0");
+                    return;
+                }
+                usage = f;
+            } else if (strcmp(opt, "mouse") == 0) {
+                inc = 1 ;
+
+                usage_page = 1;
+                usage = 2;
+
+            } else if (strcmp(opt, "joystick") == 0) {
+                inc = 1 ;
+
+                usage_page = 1;
+                usage = 4;
+            }  else {
+                error("Unrecognized option %s", opt);
+                return;
+            }
+
+            assert(inc > 0); // so you forgot to set inc(rement)
+        }
     }
 
     hid_device_t ** hiddevs;
-    cnt = hid_filter_device_list(devs, cnt, &hiddevs, vendor, product, serial, usage_page, usage);
-
-    libusb_free_device_list(devs, 1);
+    ssize_t cnt = hid_get_device_list(hid, &hiddevs, vendor, product, strlen(serial) ? serial : NULL, usage_page, usage);
 
     if (cnt < 0){
-        error("Error during filter operation: %zd", cnt);
         return;
     }
 
-    post("list all devices now: %d", cnt);
+//    post("list all devices now: %d", cnt);
 
     for(int i = 0; i < cnt; i++){
-        int orgc = 4;
-        t_atom orgv[5];
-        SETFLOAT(orgv, hiddevs[i]->desc.idVendor);
-        SETFLOAT(orgv+1, hiddevs[i]->desc.idProduct);
-        SETFLOAT(orgv+2, hiddevs[i]->hid_usage_page);
-        SETFLOAT(orgv+4, hiddevs[i]->hid_usage);
+        t_atom orgv[7];
+        int orgc = sizeof(orgv) / sizeof(t_atom);
+        SETFLOAT(orgv, hiddevs[i]->hid_usage_page);
+        SETFLOAT(orgv+1, hiddevs[i]->hid_usage);
+        SETFLOAT(orgv+2, hiddevs[i]->desc.idVendor);
+        SETFLOAT(orgv+3, hiddevs[i]->desc.idProduct);
+
+        if (hiddevs[i]->serial_string) {
+            SETSYMBOL(orgv + 4, gensym(hiddevs[i]->serial_string));
+        } else {
+            SETSYMBOL(orgv + 4, gensym("-"));
+        }
+
+        if (hiddevs[i]->manufacturer_string) {
+            SETSYMBOL(orgv + 5, gensym(hiddevs[i]->manufacturer_string));
+        } else {
+            SETSYMBOL(orgv + 5, gensym("-"));
+        }
+
+        if (hiddevs[i]->product_string) {
+            SETSYMBOL(orgv + 6, gensym(hiddevs[i]->product_string));
+        } else {
+            SETSYMBOL(orgv + 6, gensym("-"));
+        }
+//
+//        if (hiddevs[i]->manufacturer_string)
+//            post("man %s", hiddevs[i]->manufacturer_string);
+//        if (hiddevs[i]->product_string)
+//            post("prod %s", hiddevs[i]->product_string);
+//        if (hiddevs[i]->serial_string)
+//            post("serial %s", hiddevs[i]->serial_string);
+//
+//
+//        char label[256];
+//        snprintf(label, sizeof(label), "%s %s",
+//                 hiddevs[i]->manufacturer_string ? hiddevs[i]->manufacturer_string : "",
+//                 hiddevs[i]->product_string ? hiddevs[i]->product_string : ""
+//        );
+//        char * labelp = label[0] == ' ' ? &label[1] : label;
+
+
+
         outlet_anything(hid->out, gensym("dev"), orgc, orgv);
     }
 
