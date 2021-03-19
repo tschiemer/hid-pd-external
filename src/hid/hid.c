@@ -48,8 +48,8 @@ static void hid_free(hid_t *hid);
 
 static void hid_cmd_list(hid_t *hid, t_symbol *s, int argc, t_atom *argv);
 
-static int hid_get_device_list(hid_t *hid, hid_device_t ***hiddevs, uint16_t vendor, uint16_t product, char * serial, uint8_t usage_page, uint8_t usage);
-static int hid_filter_device_list(libusb_device **devs, ssize_t count, hid_device_t ***hiddevs, uint16_t vendor, uint16_t product, char * serial, uint8_t usage_page, uint8_t usage);
+static int hid_get_device_list(hid_t *hid, hid_device_t ***hiddevs, uint16_t vendor, uint16_t product, char * serial, uint8_t usage_page, uint8_t usage, uint8_t max);
+static int hid_filter_device_list(libusb_device **devs, ssize_t count, hid_device_t ***hiddevs, uint16_t vendor, uint16_t product, char * serial, uint8_t usage_page, uint8_t usage, uint8_t max);
 static void hid_free_device_list(hid_device_t ** hiddevs);
 
 
@@ -232,7 +232,7 @@ static char *get_usb_string(libusb_device_handle *dev, uint8_t idx)
 //    return -1;
 //}
 
-static int hid_get_device_list(hid_t *hid, hid_device_t ***hiddevs, uint16_t vendor, uint16_t product, char * serial, uint8_t usage_page, uint8_t usage)
+static int hid_get_device_list(hid_t *hid, hid_device_t ***hiddevs, uint16_t vendor, uint16_t product, char * serial, uint8_t usage_page, uint8_t usage, uint8_t max)
 {
     libusb_device **devs;
     ssize_t cnt;
@@ -244,7 +244,7 @@ static int hid_get_device_list(hid_t *hid, hid_device_t ***hiddevs, uint16_t ven
         return -1;
     }
 
-    cnt = hid_filter_device_list(devs, cnt, hiddevs, vendor, product, serial, usage_page, usage);
+    cnt = hid_filter_device_list(devs, cnt, hiddevs, vendor, product, serial, usage_page, usage, max);
 
     libusb_free_device_list(devs, 1);
 
@@ -256,19 +256,27 @@ static int hid_get_device_list(hid_t *hid, hid_device_t ***hiddevs, uint16_t ven
     return cnt;
 }
 
-static int hid_filter_device_list(libusb_device **devs, ssize_t count, hid_device_t ***hiddevs, uint16_t vendor, uint16_t product, char * serial, uint8_t usage_page, uint8_t usage)
+static int hid_filter_device_list(libusb_device **devs, ssize_t count, hid_device_t ***hiddevs, uint16_t vendor, uint16_t product, char * serial, uint8_t usage_page, uint8_t usage, uint8_t max)
 {
     libusb_device *dev;
     int i = 0, o = 0;
 
+    if (count <= 0){
+        return count;
+    }
+
+    if (max <= 0){
+        max = count;
+    }
+
     // let's assume that there will be fewer HID devices (interfaces) than original usb devices...
-    *hiddevs = calloc(1+count,sizeof(hid_device_t));
+    *hiddevs = calloc(1+max,sizeof(hid_device_t));
     if (!*hiddevs){
         error("failed to allocate memory for HID devices list");
         return -1;
     }
 
-    while ((dev = devs[i++]) != NULL) {
+    while ((dev = devs[i++]) != NULL && o < max) {
         struct libusb_device_descriptor desc;
         int r = libusb_get_device_descriptor(dev, &desc);
         if (r < 0) {
@@ -297,10 +305,10 @@ static int hid_filter_device_list(libusb_device **devs, ssize_t count, hid_devic
             continue;
         }
 
-        for(int k = 0; k < config->bNumInterfaces; k++) {
+        for(int k = 0; k < config->bNumInterfaces && o < max; k++) {
 //            printf("\t if %d / num_altsetting = %d\n", k, config->interface[k].num_altsetting);
 
-            for (int l = 0; l < config->interface[k].num_altsetting; l++) {
+            for (int l = 0; l < config->interface[k].num_altsetting && o < max; l++) {
 
                 if (config->interface[k].altsetting[l].bInterfaceClass != LIBUSB_CLASS_HID) {
                     continue;
@@ -331,9 +339,9 @@ static int hid_filter_device_list(libusb_device **devs, ssize_t count, hid_devic
                            (serial != NULL && desc.iSerialNumber == 0)) {
                     // filter out unwanted usages
                     // ie, do nothing
-                } else if (o >= count) {
-                    error("Too many HID interfaces, skipping device %04x:%04x usage %d %d", desc.idVendor,
-                          desc.idProduct, report_desc[1], report_desc[3]);
+//                } else if (o >= count) {
+//                    error("Too many HID interfaces, skipping device %04x:%04x usage %d %d", desc.idVendor,
+//                          desc.idProduct, report_desc[1], report_desc[3]);
                 } else {
 
                     char * serial_string = NULL;
@@ -527,7 +535,7 @@ static void hid_cmd_list(hid_t *hid, t_symbol *s, int argc, t_atom *argv)
     }
 
     hid_device_t ** hiddevs;
-    ssize_t cnt = hid_get_device_list(hid, &hiddevs, vendor, product, strlen(serial) ? serial : NULL, usage_page, usage);
+    ssize_t cnt = hid_get_device_list(hid, &hiddevs, vendor, product, strlen(serial) ? serial : NULL, usage_page, usage, 0);
 
     if (cnt < 0){
         return;
@@ -538,6 +546,7 @@ static void hid_cmd_list(hid_t *hid, t_symbol *s, int argc, t_atom *argv)
     for(int i = 0; i < cnt; i++){
         t_atom orgv[7];
         int orgc = sizeof(orgv) / sizeof(t_atom);
+
         SETFLOAT(orgv, hiddevs[i]->hid_usage_page);
         SETFLOAT(orgv+1, hiddevs[i]->hid_usage);
         SETFLOAT(orgv+2, hiddevs[i]->desc.idVendor);
@@ -560,23 +569,6 @@ static void hid_cmd_list(hid_t *hid, t_symbol *s, int argc, t_atom *argv)
         } else {
             SETSYMBOL(orgv + 6, gensym("-"));
         }
-//
-//        if (hiddevs[i]->manufacturer_string)
-//            post("man %s", hiddevs[i]->manufacturer_string);
-//        if (hiddevs[i]->product_string)
-//            post("prod %s", hiddevs[i]->product_string);
-//        if (hiddevs[i]->serial_string)
-//            post("serial %s", hiddevs[i]->serial_string);
-//
-//
-//        char label[256];
-//        snprintf(label, sizeof(label), "%s %s",
-//                 hiddevs[i]->manufacturer_string ? hiddevs[i]->manufacturer_string : "",
-//                 hiddevs[i]->product_string ? hiddevs[i]->product_string : ""
-//        );
-//        char * labelp = label[0] == ' ' ? &label[1] : label;
-
-
 
         outlet_anything(hid->out, gensym("dev"), orgc, orgv);
     }
