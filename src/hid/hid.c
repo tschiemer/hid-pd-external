@@ -13,17 +13,6 @@
 static t_class *hid_class;
 
 typedef struct {
-    t_object  x_obj;
-    libusb_context * context;
-//    t_inlet *in;
-    t_outlet *out;
-//    t_outlet *dbg_out;
-//    bool runningStatusEnabled;
-//    uint8_t runningStatusState;
-} hid_t;
-
-
-typedef struct {
     libusb_device * dev;
     struct libusb_device_descriptor desc;
 //    struct libusb_config_descriptor *config;
@@ -34,9 +23,28 @@ typedef struct {
     char * product_string;
 
     uint8_t report_desc[];
-    #define hid_usage_page  report_desc[1]
-    #define hid_usage       report_desc[3]
+#define hid_usage_page  report_desc[1]
+#define hid_usage       report_desc[3]
 } hid_device_t;
+
+typedef struct {
+    t_object  x_obj;
+    t_outlet *out;
+
+    libusb_context * context;
+
+    // currently open device
+    hid_device_t * hiddev;
+    libusb_device_handle * handle;
+
+
+//    t_inlet *in;
+//    t_outlet *dbg_out;
+//    bool runningStatusEnabled;
+//    uint8_t runningStatusState;
+} hid_t;
+
+
 
 void hid_setup(void);
 static void * hid_new();
@@ -75,8 +83,8 @@ void hid_setup(void) {
 
 
     class_addmethod(hid_class, (t_method)hid_cmd_list, gensym("list"), A_GIMME, 0);
-//                    (t_method)hid_list
-//                    , gensym("list"), 0);
+    class_addmethod(hid_class, (t_method)hid_cmd_open, gensym("open"), A_GIMME, 0);
+    class_addmethod(hid_class, (t_method)hid_cmd_close, gensym("close"), A_GIMME, 0);
 
 //    class_addmethod(midi)
 //    class_addlist(hid_class, hid_anything);
@@ -95,6 +103,8 @@ static void *hid_new()
         error("failed to init libusb: %d", r);
         return NULL;
     }
+
+    hid->handle = NULL;
 
     // generic outlet
     hid->out = outlet_new(&hid->x_obj, 0);
@@ -334,6 +344,28 @@ static int hid_filter_device_list(libusb_device **devs, ssize_t count, hid_devic
     return o;
 }
 
+static void hid_free_device(hid_device_t * hiddev)
+{
+    if (!hiddev)
+        return;
+
+    if (hiddev->serial_string)
+        free(hiddev->serial_string);
+
+    if (hiddev->manufacturer_string)
+        free(hiddev->manufacturer_string);
+
+    if (hiddev->product_string)
+        free(hiddev->product_string);
+//
+//        if (dev->config) {
+//            libusb_free_config_descriptor(dev->config);
+//        }
+
+    libusb_unref_device(hiddev->dev);
+    free(hiddev);
+}
+
 static void hid_free_device_list(hid_device_t ** hiddevs)
 {
     if (!hiddevs){
@@ -344,22 +376,7 @@ static void hid_free_device_list(hid_device_t ** hiddevs)
     int i = 0;
 
     while( (dev = hiddevs[i++]) != NULL){
-
-        if (dev->serial_string)
-            free(dev->serial_string);
-
-        if (dev->manufacturer_string)
-            free(dev->manufacturer_string);
-
-        if (dev->product_string)
-            free(dev->product_string);
-//
-//        if (dev->config) {
-//            libusb_free_config_descriptor(dev->config);
-//        }
-
-        libusb_unref_device(dev->dev);
-        free(dev);
+        hid_free_device(dev);
     }
 }
 
@@ -526,7 +543,7 @@ static void hid_cmd_list(hid_t *hid, t_symbol *s, int argc, t_atom *argv)
             SETSYMBOL(orgv + 6, gensym("-"));
         }
 
-        outlet_anything(hid->out, gensym("dev"), orgc, orgv);
+        outlet_anything(hid->out, gensym("device"), orgc, orgv);
     }
 
     hid_free_device_list(hiddevs);
@@ -535,10 +552,68 @@ static void hid_cmd_list(hid_t *hid, t_symbol *s, int argc, t_atom *argv)
 
 static void hid_cmd_open(hid_t *hid, t_symbol *s, int argc, t_atom *argv)
 {
-    post("open");
+    UNUSED(s);
+
+    if (hid->handle){
+        error("already open (%s %s %s), please first close explicitly",
+              hid->hiddev->manufacturer_string ? hid->hiddev->manufacturer_string : "",
+              hid->hiddev->product_string ? hid->hiddev->product_string : "",
+              hid->hiddev->serial_string ? hid->hiddev->serial_string : ""
+              );
+        return;
+    }
+
+    filter_args_t args;
+
+    get_filter_args(&args, argc, argv);
+
+    hid_device_t ** hiddevs;
+    ssize_t cnt = hid_get_device_list(hid, &hiddevs, args.vendor, args.product, args.serialptr, args.usage_page, args.usage, 1);
+
+    if (cnt < 0){
+        return;
+    }
+
+    if (cnt == 0){
+        error("No such device");
+        return;
+    }
+
+
+    int r = libusb_open(hiddevs[0]->dev, &hid->handle);
+    if (r < 0){
+        error("failed to open");
+
+        return;
+    }
+
+    hid->hiddev = hiddevs[0];
+
+    // just free list (not found device)
+    free(hiddevs);
+
+//    outlet_symbol(hid->out, gensym("opened"));
+    outlet_anything(hid->out, gensym("opened"), 0, NULL);
 }
 
 static void hid_cmd_close(hid_t *hid, t_symbol *s, int argc, t_atom *argv)
 {
-    post("close");
+    UNUSED(s);
+    UNUSED(argc);
+    UNUSED(argv);
+
+    if (hid->handle == NULL) {
+        post("already closed");
+    } else {
+
+        libusb_close(hid->handle);
+        hid->handle = NULL;
+
+        if (hid->hiddev) {
+            hid_free_device(hid->hiddev);
+            hid->hiddev = NULL;
+        }
+    }
+
+    outlet_anything(hid->out, gensym("closed"), 0, NULL);
 }
