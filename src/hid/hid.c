@@ -59,6 +59,8 @@ static void hid_cmd_list(hid_t *hid, t_symbol *s, int argc, t_atom *argv);
 static void hid_cmd_open(hid_t *hid, t_symbol *s, int argc, t_atom *argv);
 static void hid_cmd_close(hid_t *hid, t_symbol *s, int argc, t_atom *argv);
 
+static void hid_cmd_bang(hid_t *hid);
+static void hid_cmd_poll(hid_t *hid, t_symbol *s, int argc, t_atom *argv);
 
 static int hid_get_device_list(hid_t *hid, hid_device_t ***hiddevs, uint16_t vendor, uint16_t product, char * serial, uint8_t usage_page, uint8_t usage, uint8_t max);
 static int hid_filter_device_list(libusb_device **devs, ssize_t count, hid_device_t ***hiddevs, uint16_t vendor, uint16_t product, char * serial, uint8_t usage_page, uint8_t usage, uint8_t max);
@@ -78,19 +80,13 @@ void hid_setup(void) {
                           CLASS_DEFAULT,
                           0);
 
-    /* call a function when object gets banged */
-//    class_addbang(midimessage_gen_class, midimessage_gen_bang);
-
-
     class_addmethod(hid_class, (t_method)hid_cmd_list, gensym("list"), A_GIMME, 0);
+
     class_addmethod(hid_class, (t_method)hid_cmd_open, gensym("open"), A_GIMME, 0);
     class_addmethod(hid_class, (t_method)hid_cmd_close, gensym("close"), A_GIMME, 0);
 
-//    class_addmethod(midi)
-//    class_addlist(hid_class, hid_anything);
-//    class_addanything(hid_class, hid_anything);
-
-
+    class_addbang(hid_class, hid_cmd_bang);
+    class_addmethod(hid_class, (t_method)hid_cmd_poll, gensym("poll"), A_GIMME, 0);
 }
 
 
@@ -616,4 +612,40 @@ static void hid_cmd_close(hid_t *hid, t_symbol *s, int argc, t_atom *argv)
     }
 
     outlet_anything(hid->out, gensym("closed"), 0, NULL);
+}
+
+
+static void hid_cmd_bang(hid_t *hid)
+{
+    if (!hid->handle){
+        error("device not open");
+        return;
+    }
+
+    post("bang");
+}
+
+static void hid_cmd_poll(hid_t *hid, t_symbol *s, int argc, t_atom *argv)
+{
+    UNUSED(s);
+
+    if (!hid->handle){
+        error("device not open");
+        return;
+    }
+
+    if (argc != 1){
+        error("requires an argument");
+        return;
+    }
+
+    t_float p = atom_getfloat(argv);
+
+    if (p < 0.0){
+        error("must be integer >= 0");
+        return;
+    }
+
+    post("poll");
+
 }
