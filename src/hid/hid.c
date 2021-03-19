@@ -740,6 +740,7 @@ static void hid_cmd_report_id(hid_t *hid, t_symbol *s, int argc, t_atom *argv)
         hid->report_id = atom_getfloat(argv);
     } else {
         error("invalid argument count");
+        return;
     }
 
     t_atom atom_report_id;
