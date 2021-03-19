@@ -1,0 +1,53 @@
+#N canvas 533 151 723 728 12;
+#X obj 309 164 hid;
+#X obj 283 256 print;
+#X msg 382 31 list;
+#X msg 383 71 list vendorid 1;
+#X msg 382 196 list usage_page 1;
+#X msg 383 220 list usage 2;
+#X msg 383 244 list usage_page 1 usage 2;
+#X msg 384 280 list joystick;
+#X msg 385 304 list mouse;
+#X msg 387 398 open mouse;
+#X msg 392 462 close;
+#X msg 394 580 poll 0;
+#X msg 394 553 poll 10;
+#X obj 395 511 bng 15 250 50 0 empty empty empty 17 7 0 10 -262144
+-1 -1;
+#X msg 384 95 list productid 2;
+#X msg 384 120 list serial 0vsf-dfsd-sdg123;
+#X msg 385 147 list vendorid 1 productid 2 serial 123-456;
+#X msg 388 424 open joystick;
+#X msg 385 355 open vendorid 1 productid 2 serial 123-345;
+#X text 97 506 output all available output values;
+#X text 370 641 USB HID PD external requires libusb compatibility https://github.com/tschiemer/hid-pd-external
+;
+#X msg 72 158 report_id;
+#X text 41 31 list all devices or search for particular criteria (any
+combination possible);
+#X text 53 354 open FIRST device matching criteria and close again..
+;
+#X text 21 552 automatically poll for values every N ms and turn off
+with zero value;
+#X msg 72 215 report_id \$1;
+#X floatatom 72 192 5 0 0 0 - - -;
+#X connect 0 0 1 0;
+#X connect 2 0 0 0;
+#X connect 3 0 0 0;
+#X connect 4 0 0 0;
+#X connect 5 0 0 0;
+#X connect 6 0 0 0;
+#X connect 7 0 0 0;
+#X connect 8 0 0 0;
+#X connect 9 0 0 0;
+#X connect 10 0 0 0;
+#X connect 11 0 0 0;
+#X connect 12 0 0 0;
+#X connect 13 0 0 0;
+#X connect 14 0 0 0;
+#X connect 15 0 0 0;
+#X connect 16 0 0 0;
+#X connect 17 0 0 0;
+#X connect 21 0 0 0;
+#X connect 25 0 0 0;
+#X connect 26 0 25 0;
