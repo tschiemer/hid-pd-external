@@ -25,14 +25,15 @@ install:
 clean:
 	$(MAKE) -C src/hid clean
 	$(MAKE) -C ${LIBUSB_DIR} clean
-# 	$(MAKE) -C ${HIDAPI_DIR} clean
+	$(MAKE) -C ${HIDAPI_DIR} clean
+	$(MAKE) -C ${HIDMAP_DIR} clean
 
 
 ### libusbb
 
 libusb: ${LIBUSB_DIR}/libusb/.libs/libusb-1.0.a
 
-${LIBUSB_DIR}/libusb/libusb-1.0.la: ${LIBUSB_DIR}/Makefile
+${LIBUSB_DIR}/libusb/.libs/libusb-1.0.a: ${LIBUSB_DIR}/Makefile
 	$(MAKE) -C ${LIBUSB_DIR}
 
 ${LIBUSB_DIR}/Makefile: ${LIBUSB_DIR}/configure
@@ -58,9 +59,11 @@ ${HIDAPI_DIR}/configure:
 	
 ### usbhid_map
 
-usbhid_map: ${HIDMAP_DIR}/libusbhid_map.a
+# usbhid_map: ${HIDMAP_DIR}/libusbhid_map.a
+# 	$(MAKE) -C ${HIDMAP_DIR}
 
-${HIDMAP_DIR}/libusbhid_map.a: ${HIDMAP_DIR}/Makefile
+# ${HIDMAP_DIR}/libusbhid_map.a: ${HIDMAP_DIR}/Makefile
+usbhid_map: ${HIDMAP_DIR}/Makefile
 	$(MAKE) -C ${HIDMAP_DIR}
 
 ${HIDMAP_DIR}/Makefile:

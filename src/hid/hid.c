@@ -57,8 +57,14 @@ typedef struct {
     // parsed hid report
     usbhid_map_ref_t hid_map;
 
-    // option
     uint8_t report_id;
+    size_t report_size;
+    uint8_t * last_report;
+
+    size_t value_count;
+    struct usbhid_map_item_st ** report_items;
+    int32_t * last_values;
+    int32_t * tmp_values;
 
     // polling option/logic
     volatile int poll_ms;
@@ -255,6 +261,26 @@ static void hid_shutdown(hid_t *hid)
     if (hid->hid_map){
         usbhid_map_free(hid->hid_map);
         hid->hid_map = NULL;
+    }
+
+    if (hid->last_report){
+        free(hid->last_report);
+        hid->last_report = NULL;
+    }
+
+    if (hid->last_values){
+        free(hid->last_values);
+        hid->last_values = NULL;
+    }
+
+    if (hid->tmp_values){
+        free(hid->tmp_values);
+        hid->tmp_values = NULL;
+    }
+
+    if (hid->report_items){
+        free(hid->report_items);
+        hid->report_items = NULL;
     }
 }
 
@@ -718,7 +744,29 @@ static void hid_cmd_open(hid_t *hid, t_symbol *s, int argc, t_atom *argv)
         error("no input reports");
     }
 
-    post("report_id = %d", hid->report_id);
+    hid->report_size = usbhid_map_get_report_size(hid->hid_map, Input(0), hid->report_id);
+    hid->last_report = calloc(sizeof(uint8_t), hid->report_size);
+
+    hid->value_count = usbhid_map_get_report_item_count(hid->hid_map, Input(0), hid->report_id);
+    if (hid->value_count == 0){
+        post("no items?");
+        hid->report_items = NULL;
+        hid->last_values = NULL;
+        hid->tmp_values = NULL;
+        hid->report_items = NULL;
+    } else {
+        hid->report_items = calloc(hid->value_count, sizeof(struct usbhid_map_item_st *));
+        hid->last_values = calloc(hid->value_count, sizeof(int32_t));
+        hid->tmp_values = calloc(hid->value_count, sizeof(int32_t));
+
+        struct usbhid_map_item_st * first_item = usbhid_map_get_item(hid->hid_map, Input(0), hid->report_id, 0,0, NULL);
+        for(size_t i = 0; i < hid->value_count; i++){
+            hid->report_items[i] = first_item + i;
+        }
+    }
+
+
+    post("report_id = %d (size %d, value count %d)", hid->report_id, hid->report_size, hid->value_count);
 
 
     hid->handle = hid_open(hiddevs[0]->desc.idVendor, hiddevs[0]->desc.idProduct, hiddevs[0]->serial_string);
@@ -758,11 +806,46 @@ static int hid_read_report(hid_t * hid)
 {
     uint8_t data[128];
 
-//    size_t r = hid_read(hid->handle, data, sizeof(data));
+
     size_t r = hid_read_timeout(hid->handle, data, sizeof(data), hid->poll_ms ? hid->poll_ms : 0);
 
     if (r > 0){
-        post("got report!");
+//        post("got report!");
+
+        if (r != hid->report_size){
+            error("report size mismatch! expecting errors");
+            hid->poll_ms = 0;
+        }
+        // only act when data is different
+        else if (memcmp(data, hid->last_report, hid->report_size) != 0) {
+//            post("report changed");
+
+            // update last report
+            memcpy(hid->last_report, data, hid->report_size);
+
+            if (usbhid_map_extract_values(hid->tmp_values, hid->report_items, hid->value_count, hid->last_report, hid->report_size)){
+                error("usbhid_map_extract_values()");
+            } else {
+
+                for( size_t i = 0; i < hid->value_count; i++){
+                    if (hid->last_values[i] != hid->tmp_values[i]){
+//                        post("changed %d to %d", hid->report_items[i]->usage, hid->tmp_values[i]);
+
+                        t_atom atoms[2];
+                        SETFLOAT(atoms, hid->report_items[i]->usage);
+                        SETFLOAT(atoms + 1, hid->tmp_values[i]);
+
+                        outlet_anything(hid->out, gensym("value"), 2, atoms);
+                    }
+                }
+
+                int32_t * swap = hid->last_values;
+                hid->last_values = hid->tmp_values;
+                hid->tmp_values = swap;
+//                memcpy(hid->last_values, hid->tmp_values, hid->value_count * sizeof(int32_t));
+            }
+        }
+
     }
 
     return r > 0;
