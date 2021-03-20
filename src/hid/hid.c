@@ -810,14 +810,19 @@ static int hid_read_report(hid_t * hid)
     size_t r = hid_read_timeout(hid->handle, data, sizeof(data), hid->poll_ms ? hid->poll_ms : 0);
 
     if (r > 0){
-//        post("got report!");
-
+//        post("got report! %d", r);
+//
+//        for(int i = 0; i < r; i++){
+//            post("%02x", data[i]);
+//        }
+//
+//        return r;
         if (r != hid->report_size){
             error("report size mismatch! expecting errors");
             hid->poll_ms = 0;
         }
         // only act when data is different
-        else if (memcmp(data, hid->last_report, hid->report_size) != 0) {
+        else {//if (memcmp(data, hid->last_report, hid->report_size) != 0) {
 //            post("report changed");
 
             // update last report
@@ -828,21 +833,23 @@ static int hid_read_report(hid_t * hid)
             } else {
 
                 for( size_t i = 0; i < hid->value_count; i++){
-                    if (hid->last_values[i] != hid->tmp_values[i]){
+                    if (hid->last_values[i] != hid->tmp_values[i])
+                    {
 //                        post("changed %d to %d", hid->report_items[i]->usage, hid->tmp_values[i]);
 
-                        t_atom atoms[2];
-                        SETFLOAT(atoms, hid->report_items[i]->usage);
-                        SETFLOAT(atoms + 1, hid->tmp_values[i]);
+                        t_atom atoms[3];
+                        SETFLOAT(atoms, hid->report_items[i]->usage_page);
+                        SETFLOAT(atoms + 1, hid->report_items[i]->usage);
+                        SETFLOAT(atoms + 2, hid->tmp_values[i]);
 
-                        outlet_anything(hid->out, gensym("value"), 2, atoms);
+                        outlet_anything(hid->out, gensym("value"), 3, atoms);
                     }
                 }
 
-                int32_t * swap = hid->last_values;
-                hid->last_values = hid->tmp_values;
-                hid->tmp_values = swap;
-//                memcpy(hid->last_values, hid->tmp_values, hid->value_count * sizeof(int32_t));
+//                int32_t * swap = hid->last_values;
+//                hid->last_values = hid->tmp_values;
+//                hid->tmp_values = swap;
+                memcpy(hid->last_values, hid->tmp_values, hid->value_count * sizeof(int32_t));
             }
         }
 
