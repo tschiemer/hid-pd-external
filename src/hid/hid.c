@@ -78,6 +78,7 @@ static int hid_filter_device_list(libusb_device **devs, ssize_t count, hid_devic
 static void hid_free_device(hid_device_t * hiddev);
 static void hid_free_device_list(hid_device_t ** hiddevs);
 
+static int hid_read_report(hid_t * hid);
 //static char *get_usb_wstring(libusb_device_handle *dev, uint8_t idx);
 
 
@@ -697,8 +698,6 @@ static void hid_cmd_open(hid_t *hid, t_symbol *s, int argc, t_atom *argv)
         return;
     }
 
-    hid_set_nonblocking(hid->handle, 1);
-
     hid->hiddev = hiddevs[0];
 
     // just free list (not found device)
@@ -723,6 +722,20 @@ static void hid_cmd_close(hid_t *hid, t_symbol *s, int argc, t_atom *argv)
     outlet_anything(hid->out, gensym("closed"), 0, NULL);
 }
 
+static int hid_read_report(hid_t * hid)
+{
+    uint8_t data[128];
+
+//    size_t r = hid_read(hid->handle, data, sizeof(data));
+    size_t r = hid_read_timeout(hid->handle, data, sizeof(data), hid->poll_ms ? hid->poll_ms : 0);
+
+    if (r > 0){
+        post("got report!");
+    }
+
+    return r > 0;
+}
+
 static void hid_cmd_bang(hid_t *hid)
 {
     if (!hid->handle){
@@ -735,14 +748,9 @@ static void hid_cmd_bang(hid_t *hid)
         return;
     }
 
+    hid_set_nonblocking(hid->handle, 1);
 
-    uint8_t data[128];
-
-    ssize_t r;
-
-    while( (r = hid_read(hid->handle, data, sizeof(data))) > 0){
-        post("rp");
-    }
+    while( hid_read_report(hid) );
 }
 
 
@@ -750,17 +758,11 @@ static void * polling_thread_handler(void * ptr)
 {
     hid_t * hid = ptr;
 
-    uint8_t data[128];
-    ssize_t r;
+    hid_set_nonblocking(hid->handle, 0);
 
     while(hid->poll_ms){
 
-//        r = hid_get_input_report(hid, hid->report_id, data, sizeof(data));
-        r = hid_read(hid->handle, data, sizeof(data));
-
-        if (r > 0){
-            post("got report!");
-        }
+        hid_read_report(hid);
 
         usleep(1000*hid->poll_ms);
     }
@@ -793,6 +795,7 @@ static void hid_cmd_poll(hid_t *hid, t_symbol *s, int argc, t_atom *argv)
 
     if (hid->poll_ms && poll_ms == 0){
         hid->poll_ms = 0;
+//        pthread_kill(hid->polling_thread, SIGCONT);
         pthread_join(hid->polling_thread, NULL);
     }
 

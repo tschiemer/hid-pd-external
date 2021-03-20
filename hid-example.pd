@@ -20,8 +20,6 @@
 #X msg 388 424 open joystick;
 #X msg 385 355 open vendorid 1 productid 2 serial 123-345;
 #X text 97 506 output all available output values;
-#X text 370 641 USB HID PD external requires libusb compatibility https://github.com/tschiemer/hid-pd-external
-;
 #X msg 72 158 report_id;
 #X msg 72 215 report_id \$1;
 #X floatatom 72 192 5 0 0 0 - - -;
@@ -31,6 +29,8 @@ combination possible);
 with zero value;
 #X text 47 354 open FIRST device matching criteria and close again..
 ;
+#X text 355 643 USB HID PD external requires system libusb and hidapi
+compatibility https://github.com/tschiemer/hid-pd-external;
 #X connect 0 0 1 0;
 #X connect 2 0 0 0;
 #X connect 3 0 0 0;
@@ -48,6 +48,6 @@ with zero value;
 #X connect 15 0 0 0;
 #X connect 16 0 0 0;
 #X connect 17 0 0 0;
+#X connect 20 0 0 0;
 #X connect 21 0 0 0;
-#X connect 22 0 0 0;
-#X connect 23 0 22 0;
+#X connect 22 0 21 0;
