@@ -1,8 +1,11 @@
 
 
 #include "m_pd.h"
-#include "libusb/libusb.h"
+#include "libusb.h"
+#include "hidapi.h"
+
 #include <stdlib.h>
+#include <unistd.h>
 #include <string.h>
 #include <wchar.h>
 #include <assert.h>
@@ -14,6 +17,7 @@
 #define UNUSED(x) (void)(x)
 
 static t_class *hid_class;
+static int obj_counter;
 
 typedef struct {
     libusb_device * dev;
@@ -21,9 +25,13 @@ typedef struct {
 //    struct libusb_config_descriptor *config;
     uint8_t interface_num;
 
-    char * serial_string;
-    char * manufacturer_string;
-    char * product_string;
+    int input_endpoint;
+    int output_endpoint;
+    int input_ep_max_packet_size;
+
+    wchar_t * serial_string;
+    wchar_t * manufacturer_string;
+    wchar_t * product_string;
 
     uint8_t report_desc[];
 #define hid_usage_page  report_desc[1]
@@ -34,21 +42,17 @@ typedef struct {
     t_object  x_obj;
     t_outlet *out;
 
-    libusb_context * context;
+    libusb_context * usb_context;
 
     // currently open device
     hid_device_t * hiddev;
-    libusb_device_handle * handle;
+    hid_device * handle;
 
     uint8_t report_id;
 
     volatile int poll_ms;
     pthread_t polling_thread;
 
-//    t_inlet *in;
-//    t_outlet *dbg_out;
-//    bool runningStatusEnabled;
-//    uint8_t runningStatusState;
 } hid_t;
 
 
@@ -70,10 +74,14 @@ static void hid_cmd_report_id(hid_t *hid, t_symbol *s, int argc, t_atom *argv);
 
 static int hid_get_device_list(hid_t *hid, hid_device_t ***hiddevs, uint16_t vendor, uint16_t product, char * serial, uint8_t usage_page, uint8_t usage, uint8_t max);
 static int hid_filter_device_list(libusb_device **devs, ssize_t count, hid_device_t ***hiddevs, uint16_t vendor, uint16_t product, char * serial, uint8_t usage_page, uint8_t usage, uint8_t max);
+
+static void hid_free_device(hid_device_t * hiddev);
 static void hid_free_device_list(hid_device_t ** hiddevs);
 
-static char *get_usb_string(libusb_device_handle *dev, uint8_t idx);
+//static char *get_usb_wstring(libusb_device_handle *dev, uint8_t idx);
 
+
+static void hid_shutdown(hid_t *hid);
 
 /**
  * define the function-space of the class
@@ -95,6 +103,8 @@ void hid_setup(void) {
     class_addmethod(hid_class, (t_method)hid_cmd_poll, gensym("poll"), A_GIMME, 0);
 
     class_addmethod(hid_class, (t_method)hid_cmd_report_id, gensym("report_id"), A_GIMME, 0);
+
+    obj_counter = 0;
 }
 
 
@@ -102,11 +112,19 @@ static void *hid_new()
 {
     hid_t *hid = (hid_t *)pd_new(hid_class);
 
-    int r = libusb_init(&hid->context);
+    int r = libusb_init(&hid->usb_context);
     if (r < 0){
         error("failed to init libusb: %d", r);
         return NULL;
     }
+
+    if (obj_counter == 0){
+        if (hid_init()){
+            error("failed to init hid");
+            return NULL;
+        }
+    }
+    obj_counter++;
 
     hid->handle = NULL;
 
@@ -128,7 +146,16 @@ static void *hid_new()
 
 static void hid_free(hid_t *hid)
 {
-    libusb_exit(hid->context);
+    hid_shutdown(hid);
+
+    if (obj_counter){
+        obj_counter--;
+        if (!obj_counter){
+            hid_exit();
+        }
+    }
+
+    libusb_exit(hid->usb_context);
 }
 
 //static void hid_anything(hid_t *hid, t_symbol *s, int argc, t_atom *argv)
@@ -144,11 +171,11 @@ static void hid_free(hid_t *hid)
 /* This function returns a newly allocated wide string containing the USB
    device string numbered by the index. The returned string must be freed
    by using free(). */
-static char *get_usb_string(libusb_device_handle *dev, uint8_t idx)
+static wchar_t *get_usb_wstring(libusb_device_handle *dev, uint8_t idx)
 {
     char buf[512];
     int len;
-    char *str = NULL;
+    wchar_t *str = NULL;
 
 
     /* Determine which language to use. */
@@ -167,15 +194,51 @@ static char *get_usb_string(libusb_device_handle *dev, uint8_t idx)
         return NULL;
 
 	len -= 2;
-	str = (char*) malloc((len / 2 + 1) * sizeof(wchar_t));
+	str = (wchar_t*) malloc((len / 2 + 1) * sizeof(wchar_t));
 	int i;
 	for (i = 0; i < len / 2; i++) {
-		str[i] = buf[i * 2 + 2];// | (buf[i * 2 + 3] << 8);
+		str[i] = buf[i * 2 + 2] | (buf[i * 2 + 3] << 8);
 	}
 	str[len / 2] = 0x00000000;
 
 
     return str;
+}
+
+static int wchar2char(wchar_t * wstr, char * cstr, size_t count)
+{
+    if (!count--){
+        return 0;
+    }
+
+    int len = 0;
+    for(;*wstr && count--; wstr++, cstr++, len++){
+        *cstr = *wstr;
+    }
+    *cstr = '\0';
+
+    return len;
+}
+
+static void hid_shutdown(hid_t *hid)
+{
+    // first shutdown threads
+    if (hid->poll_ms){
+        hid->poll_ms = 0;
+        pthread_join(hid->polling_thread, NULL);
+    }
+
+    // then close handle
+    if (hid->handle){
+        hid_close(hid->handle);
+        hid->handle = NULL;
+    }
+
+    // and free store device
+    if (hid->hiddev){
+        hid_free_device(hid->hiddev);
+        hid->hiddev = NULL;
+    }
 }
 
 
@@ -185,7 +248,7 @@ static int hid_get_device_list(hid_t *hid, hid_device_t ***hiddevs, uint16_t ven
     ssize_t cnt;
 
 
-    cnt = libusb_get_device_list(hid->context, &devs);
+    cnt = libusb_get_device_list(hid->usb_context, &devs);
     if (cnt < 0){
         error("Failed to get device list: %zd", cnt);
         return -1;
@@ -291,13 +354,16 @@ static int hid_filter_device_list(libusb_device **devs, ssize_t count, hid_devic
 //                          desc.idProduct, report_desc[1], report_desc[3]);
                 } else {
 
-                    char * serial_string = NULL;
+                    wchar_t * serial_wstring = NULL;
+                    char serial_cstring[256];
 
-                    if (desc.iSerialNumber > 0 && (serial_string = get_usb_string(handle, desc.iSerialNumber)) == NULL){
-                        error("failed to load serial for device %04x:%04x", desc.idVendor, desc.idProduct);
-                    } else if (serial != NULL && strcmp(serial, serial_string) != 0){
-                        free(serial_string);
+
+                    if (desc.iSerialNumber > 0 && (serial_wstring = get_usb_wstring(handle, desc.iSerialNumber)) == NULL){
+                        error("failed to load (required) serial for device %04x:%04x", desc.idVendor, desc.idProduct);
+                    } else if (serial != NULL && wchar2char(serial_wstring, serial_cstring, sizeof(serial_cstring)) && strcmp(serial, serial_cstring) != 0){
+                        free(serial_wstring);
                     } else {
+
 
                         hid_device_t * hiddev = calloc(1, sizeof(hid_device_t) + r);
 
@@ -308,21 +374,54 @@ static int hid_filter_device_list(libusb_device **devs, ssize_t count, hid_devic
 
 //                    hiddev->config = config;
 //                    config = NULL;
+                        post("if = %d", interface_num);
 
                         hiddev->interface_num = interface_num;
 
                         memcpy(hiddev->report_desc, report_desc, r);
 
                         /* Serial Number */
-                        hiddev->serial_string = serial_string;
+                        hiddev->serial_string = serial_wstring;
 
                         /* Manufacturer and Product strings */
                         if (desc.iManufacturer > 0)
                             hiddev->manufacturer_string =
-                                    get_usb_string(handle, desc.iManufacturer);
+                                    get_usb_wstring(handle, desc.iManufacturer);
                         if (desc.iProduct > 0)
                             hiddev->product_string =
-                                    get_usb_string(handle, desc.iProduct);
+                                    get_usb_wstring(handle, desc.iProduct);
+
+
+                        /* Find the INPUT and OUTPUT endpoints. An
+						   OUTPUT endpoint is not required. */
+                        for (int e = 0; e < config->interface[k].altsetting[l].bNumEndpoints; e++) {
+                            const struct libusb_endpoint_descriptor *ep = &config->interface[k].altsetting[l].endpoint[i];
+
+                            /* Determine the type and direction of this
+                               endpoint. */
+                            int is_interrupt =
+                                    (ep->bmAttributes & LIBUSB_TRANSFER_TYPE_MASK)
+                                    == LIBUSB_TRANSFER_TYPE_INTERRUPT;
+                            int is_output =
+                                    (ep->bEndpointAddress & LIBUSB_ENDPOINT_DIR_MASK)
+                                    == LIBUSB_ENDPOINT_OUT;
+                            int is_input =
+                                    (ep->bEndpointAddress & LIBUSB_ENDPOINT_DIR_MASK)
+                                    == LIBUSB_ENDPOINT_IN;
+
+                            /* Decide whether to use it for input or output. */
+                            if (hiddev->input_endpoint == 0 &&
+                                is_interrupt && is_input) {
+                                /* Use this endpoint for INPUT */
+                                hiddev->input_endpoint = ep->bEndpointAddress;
+                                hiddev->input_ep_max_packet_size = ep->wMaxPacketSize;
+                            }
+                            if (hiddev->output_endpoint == 0 &&
+                                is_interrupt && is_output) {
+                                /* Use this endpoint for OUTPUT */
+                                hiddev->output_endpoint = ep->bEndpointAddress;
+                            }
+                        }
 
                         (*hiddevs)[o++] = hiddev;
 
@@ -529,20 +628,27 @@ static void hid_cmd_list(hid_t *hid, t_symbol *s, int argc, t_atom *argv)
         SETFLOAT(orgv+2, hiddevs[i]->desc.idVendor);
         SETFLOAT(orgv+3, hiddevs[i]->desc.idProduct);
 
+        char serial[256];
+        char man[256];
+        char product[256];
+
         if (hiddevs[i]->serial_string) {
-            SETSYMBOL(orgv + 4, gensym(hiddevs[i]->serial_string));
+            wchar2char(hiddevs[i]->serial_string, serial, sizeof(serial));
+            SETSYMBOL(orgv + 4, gensym(serial));
         } else {
             SETSYMBOL(orgv + 4, gensym("-"));
         }
 
         if (hiddevs[i]->manufacturer_string) {
-            SETSYMBOL(orgv + 5, gensym(hiddevs[i]->manufacturer_string));
+            wchar2char(hiddevs[i]->manufacturer_string, man, sizeof(man));
+            SETSYMBOL(orgv + 5, gensym(man));
         } else {
             SETSYMBOL(orgv + 5, gensym("-"));
         }
 
         if (hiddevs[i]->product_string) {
-            SETSYMBOL(orgv + 6, gensym(hiddevs[i]->product_string));
+            wchar2char(hiddevs[i]->product_string, product, sizeof(product));
+            SETSYMBOL(orgv + 6, gensym(product));
         } else {
             SETSYMBOL(orgv + 6, gensym("-"));
         }
@@ -559,11 +665,7 @@ static void hid_cmd_open(hid_t *hid, t_symbol *s, int argc, t_atom *argv)
     UNUSED(s);
 
     if (hid->handle){
-        error("already open (%s %s %s), please first close explicitly",
-              hid->hiddev->manufacturer_string ? hid->hiddev->manufacturer_string : "",
-              hid->hiddev->product_string ? hid->hiddev->product_string : "",
-              hid->hiddev->serial_string ? hid->hiddev->serial_string : ""
-              );
+        error("already open");
         return;
     }
 
@@ -587,12 +689,15 @@ static void hid_cmd_open(hid_t *hid, t_symbol *s, int argc, t_atom *argv)
     hid->poll_ms = 0;
     hid->report_id = 0;
 
-    int r = libusb_open(hiddevs[0]->dev, &hid->handle);
-    if (r < 0){
-        error("failed to open");
 
+    hid->handle = hid_open(hiddevs[0]->desc.idVendor, hiddevs[0]->desc.idProduct, hiddevs[0]->serial_string);
+    if (hid->handle < 0){
+        error("failed to open");
+        hid_free_device_list(hiddevs);
         return;
     }
+
+    hid_set_nonblocking(hid->handle, 1);
 
     hid->hiddev = hiddevs[0];
 
@@ -610,38 +715,12 @@ static void hid_cmd_close(hid_t *hid, t_symbol *s, int argc, t_atom *argv)
     UNUSED(argv);
 
     if (hid->handle == NULL) {
-        post("already closed");
+        error("already closed");
     } else {
-
-        libusb_close(hid->handle);
-        hid->handle = NULL;
-
-        if (hid->hiddev) {
-            hid_free_device(hid->hiddev);
-            hid->hiddev = NULL;
-        }
+        hid_shutdown(hid);
     }
 
     outlet_anything(hid->out, gensym("closed"), 0, NULL);
-}
-
-
-static int hid_get_input_report(hid_t * hid, uint8_t report_id, uint8_t *data, size_t count)
-{
-    int res = -1;
-
-    res = libusb_control_transfer(hid->handle,
-                                  LIBUSB_REQUEST_TYPE_CLASS|LIBUSB_RECIPIENT_INTERFACE|LIBUSB_ENDPOINT_IN,
-                                  0x01/*HID get_report*/,
-                                  (1/*HID Input*/ << 8) | report_id,
-                                  hid->hiddev->interface_num,
-                                  data, count,
-                                  1000/*timeout millis*/);
-
-    if (res < 0)
-        return -1;
-
-    return res;
 }
 
 static void hid_cmd_bang(hid_t *hid)
@@ -651,22 +730,24 @@ static void hid_cmd_bang(hid_t *hid)
         return;
     }
 
-//    post("bang");
+    if (hid->poll_ms){
+        error("polling already in process - it's pointless to bang");
+        return;
+    }
+
 
     uint8_t data[128];
 
-    ssize_t r = hid_get_input_report(hid, hid->report_id, data, sizeof(data));
+    ssize_t r;
 
-
-    post("got report? %d", r);
-
-    if (r > 0){
+    while( (r = hid_read(hid->handle, data, sizeof(data))) > 0){
+        post("rp");
     }
 }
 
 
-static void * polling_thread_handler(void * ptr) {
-
+static void * polling_thread_handler(void * ptr)
+{
     hid_t * hid = ptr;
 
     uint8_t data[128];
@@ -674,7 +755,8 @@ static void * polling_thread_handler(void * ptr) {
 
     while(hid->poll_ms){
 
-        r = hid_get_input_report(hid, hid->report_id, data, sizeof(data));
+//        r = hid_get_input_report(hid, hid->report_id, data, sizeof(data));
+        r = hid_read(hid->handle, data, sizeof(data));
 
         if (r > 0){
             post("got report!");
@@ -736,14 +818,16 @@ static void hid_cmd_report_id(hid_t *hid, t_symbol *s, int argc, t_atom *argv)
 
     if (argc == 0){
         // do nothing
+        t_atom atom_report_id;
+        SETFLOAT(&atom_report_id, hid->report_id);
+        outlet_anything(hid->out, gensym("report_id"), 1, &atom_report_id);
     } else if (argc == 1){
         hid->report_id = atom_getfloat(argv);
+        //TODO set report
+        return;
     } else {
         error("invalid argument count");
         return;
     }
 
-    t_atom atom_report_id;
-    SETFLOAT(&atom_report_id, hid->report_id);
-    outlet_anything(hid->out, gensym("report_id"), 1, &atom_report_id);
 }

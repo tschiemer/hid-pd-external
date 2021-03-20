@@ -7,7 +7,7 @@
 lib.name = hid
 
 # input source file (class name == source file basename)
-class.sources = hid.c	
+class.sources = hid.c
 
 # all extra files to be included in binary distribution of the library
 datafiles =
