@@ -762,6 +762,8 @@ static void hid_cmd_open(hid_t *hid, t_symbol *s, int argc, t_atom *argv)
         struct usbhid_map_item_st * first_item = usbhid_map_get_item(hid->hid_map, Input(0), hid->report_id, 0,0, NULL);
         for(size_t i = 0; i < hid->value_count; i++){
             hid->report_items[i] = first_item + i;
+
+            post("page %d usage %d offset %d size %d", hid->report_items[i]->usage_page,hid->report_items[i]->usage,hid->report_items[i]->report_offset,hid->report_items[i]->report_size);
         }
     }
 
@@ -810,7 +812,7 @@ static int hid_read_report(hid_t * hid)
     size_t r = hid_read_timeout(hid->handle, data, sizeof(data), hid->poll_ms ? hid->poll_ms : 0);
 
     if (r > 0){
-//        post("got report! %d", r);
+
 //
 //        for(int i = 0; i < r; i++){
 //            post("%02x", data[i]);
@@ -822,28 +824,49 @@ static int hid_read_report(hid_t * hid)
             hid->poll_ms = 0;
         }
         // only act when data is different
-        else {//if (memcmp(data, hid->last_report, hid->report_size) != 0) {
+        else if (memcmp(data, hid->last_report, hid->report_size) != 0) {
 //            post("report changed");
 
             // update last report
             memcpy(hid->last_report, data, hid->report_size);
 
-            if (usbhid_map_extract_values(hid->tmp_values, hid->report_items, hid->value_count, hid->last_report, hid->report_size)){
+            if (usbhid_map_extract_values(hid->tmp_values, hid->report_items, hid->value_count, data, hid->report_size)){
                 error("usbhid_map_extract_values()");
             } else {
 
+//                int changed = 0;
                 for( size_t i = 0; i < hid->value_count; i++){
+
+//                    post("%d := %d", hid->report_items[i]->usage, hid->tmp_values[i]);
+
                     if (hid->last_values[i] != hid->tmp_values[i])
                     {
+//                        changed = 1;
 //                        post("changed %d to %d", hid->report_items[i]->usage, hid->tmp_values[i]);
+
+                        int32_t v = hid->tmp_values[i];
 
                         t_atom atoms[3];
                         SETFLOAT(atoms, hid->report_items[i]->usage_page);
                         SETFLOAT(atoms + 1, hid->report_items[i]->usage);
-                        SETFLOAT(atoms + 2, hid->tmp_values[i]);
+                        SETFLOAT(atoms + 2, v);
 
                         outlet_anything(hid->out, gensym("value"), 3, atoms);
                     }
+                }
+
+//                if (changed)
+                {
+
+//                    post("changed 0x%02x, 0x%02x, 0x%02x, 0x%02x, 0x%02x, 0x%02x, 0x%02x, ",
+//                         data[0],
+//                         data[1],
+//                         data[2],
+//                         data[3],
+//                         data[4],
+//                         data[5],
+//                         data[6]
+//                    );
                 }
 
 //                int32_t * swap = hid->last_values;
