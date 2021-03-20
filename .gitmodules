@@ -7,3 +7,7 @@
 [submodule "deps/hidapi"]
 	path = deps/hidapi
 	url = https://github.com/libusb/hidapi
+[submodule "deps/USB-HID-Report-Parser"]
+	path = deps/USB-HID-Report-Parser
+	url = https://github.com/tschiemer/USB-HID-Report-Parser
+	branch = usbhid_map

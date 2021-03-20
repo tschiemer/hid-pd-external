@@ -3,6 +3,9 @@
 #include "m_pd.h"
 #include "libusb.h"
 #include "hidapi.h"
+#include "usbhid_map.h"
+//#include "report_item.h"
+//#include "report_usage.h"
 
 #include <stdlib.h>
 #include <unistd.h>
@@ -33,6 +36,7 @@ typedef struct {
     wchar_t * manufacturer_string;
     wchar_t * product_string;
 
+    size_t report_desc_len;
     uint8_t report_desc[];
 #define hid_usage_page  report_desc[1]
 #define hid_usage       report_desc[3]
@@ -44,12 +48,19 @@ typedef struct {
 
     libusb_context * usb_context;
 
-    // currently open device
+    //// currently open device
+    // local type
     hid_device_t * hiddev;
+    // hidapi type
     hid_device * handle;
 
+    // parsed hid report
+    usbhid_map_ref_t hid_map;
+
+    // option
     uint8_t report_id;
 
+    // polling option/logic
     volatile int poll_ms;
     pthread_t polling_thread;
 
@@ -240,6 +251,11 @@ static void hid_shutdown(hid_t *hid)
         hid_free_device(hid->hiddev);
         hid->hiddev = NULL;
     }
+
+    if (hid->hid_map){
+        usbhid_map_free(hid->hid_map);
+        hid->hid_map = NULL;
+    }
 }
 
 
@@ -373,12 +389,13 @@ static int hid_filter_device_list(libusb_device **devs, ssize_t count, hid_devic
 
                         memcpy(&hiddev->desc, &desc, sizeof(struct libusb_device_descriptor));
 
+                        // on macos causes a fault...
 //                    hiddev->config = config;
 //                    config = NULL;
-                        post("if = %d", interface_num);
 
                         hiddev->interface_num = interface_num;
 
+                        hiddev->report_desc_len = r;
                         memcpy(hiddev->report_desc, report_desc, r);
 
                         /* Serial Number */
@@ -687,8 +704,21 @@ static void hid_cmd_open(hid_t *hid, t_symbol *s, int argc, t_atom *argv)
     }
 
 
-    hid->poll_ms = 0;
-    hid->report_id = 0;
+
+
+    if (usbhid_map_parse_desc(&hid->hid_map, hiddevs[0]->report_desc, hiddevs[0]->report_desc_len)){
+        error("failed to parse HID descriptor");
+        hid_free_device_list(hiddevs);
+        return;
+    }
+
+    // TODO get default / validate report id
+
+    if (usbhid_map_get_report_ids(hid->hid_map, Input(0), &hid->report_id, 1) == 0){
+        error("no input reports");
+    }
+
+    post("report_id = %d", hid->report_id);
 
 
     hid->handle = hid_open(hiddevs[0]->desc.idVendor, hiddevs[0]->desc.idProduct, hiddevs[0]->serial_string);
@@ -697,6 +727,8 @@ static void hid_cmd_open(hid_t *hid, t_symbol *s, int argc, t_atom *argv)
         hid_free_device_list(hiddevs);
         return;
     }
+
+    hid->poll_ms = 0;
 
     hid->hiddev = hiddevs[0];
 
