@@ -83,12 +83,13 @@ If polling (`<msec>` > 0) is enabled *banging* is not possible, to disable polli
 
 ## License
 
-Copyright 2021 Philip Tschiemer, ICST Institute for Computer Music and Sound
+Copyright 2021 ICST Institute for Computer Music and Sound
 Technology, Zurich University of the Arts
 All rights reserved.
 
-
 GNU General Public License v3
+
+Author Philip Tschiemer, https://github.com/tschiemer
 
 Relies on (also see [deps](deps)):
 - [libusb](https://github.com/libusb/libusb)
