@@ -1,6 +1,6 @@
 # hid-pd-external
 
-An USB HID external for PureData (PD) 
+An USB HID external for PureData (PD)
 
 *Note* the current version only outputs raw values as received from the HID -
 HID descriptor input item specifics (such as min/max, units, exponentials, etc)
@@ -17,6 +17,10 @@ Tested RPi 4 (5.10.17-v7l+), in principle works but is suboptimal.
 - [ ] Feature reports?
 - [ ] Use hidraw instead of libusb (see note under linux)
 
+## Binaries
+
+See https://github.com/tschiemer/hid-pd-external/releases
+
 ## Building
 
 ### macos
@@ -27,7 +31,7 @@ brew install libusb hidapi
 ```
 
 Compile:
-```bash 
+```bash
 git clone --recursive https://github.com/tschiemer/hid-pd-external
 cd hid-pd-external/
 make -f Makefile.macos && make -f Makefile.macos install
