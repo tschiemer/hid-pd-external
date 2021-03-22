@@ -11,7 +11,7 @@ Tested RPi 4 (5.10.17-v7l+), in principle works but is suboptimal.
 
 ![hid-example.pd](hid-example.pd.png)
 
-## Todosgit@gitlab.zhdk.ch:ptschiem/puredata-hid-external.git
+## Todos
 
 - [ ] Add output report support
 - [ ] Feature reports?
