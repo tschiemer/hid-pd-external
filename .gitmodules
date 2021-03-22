@@ -1,12 +1,6 @@
 [submodule "deps/pd-lib-builder"]
 	path = deps/pd-lib-builder
 	url = https://github.com/pure-data/pd-lib-builder/
-[submodule "deps/libusb"]
-	path = deps/libusb
-	url = https://github.com/libusb/libusb
-[submodule "deps/hidapi"]
-	path = deps/hidapi
-	url = https://github.com/libusb/hidapi
 [submodule "deps/USB-HID-Report-Parser"]
 	path = deps/USB-HID-Report-Parser
 	url = https://github.com/tschiemer/USB-HID-Report-Parser

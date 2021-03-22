@@ -21,8 +21,12 @@ Tested RPi 4 (5.10.17-v7l+), in principle works but is suboptimal.
 
 ### macos
 
-*Should* work as is..
+Install dependencies:
+```bash
+brew install libusb hidapi
+```
 
+Compile:
 ```bash 
 git clone --recursive https://github.com/tschiemer/hid-pd-external
 cd hid-pd-external/
@@ -30,8 +34,6 @@ make -f Makefile.macos && make -f Makefile.macos install
 ```
 
 ### linux (Raspberry Pi)
-
-A bit more troublesome.. these instructions might not get you all the way, but should be a start.
 
 *NOTE* as it is, using libusb (in this external) on linux is somewhat invasive on USB devices as kernel
 drivers might be detached for this to work. Using hidraw (as offered by hidapi) this seems to work without

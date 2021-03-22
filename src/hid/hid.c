@@ -3,10 +3,11 @@
 #include "m_pd.h"
 #include "usbhid_map.h"
 
-#include <libusb.h>
-#include <hidapi.h>
 //#include "report_item.h"
 //#include "report_usage.h"
+
+#include <libusb-1.0/libusb.h>
+#include <hidapi/hidapi.h>
 
 #include <stdlib.h>
 #include <unistd.h>
@@ -391,10 +392,13 @@ static int hid_filter_device_list(libusb_device **devs, ssize_t count, hid_devic
                 }
 #endif
 
+#if !__APPLE__
                 r = libusb_claim_interface(handle, interface_num);
                 if (r < 0) {
                     error("claim_interface(): %d", r);
-                } else {
+                } else
+#endif
+                {
 
                     uint8_t report_desc[256];
                     r = libusb_control_transfer(handle, LIBUSB_ENDPOINT_IN | LIBUSB_RECIPIENT_INTERFACE,
@@ -490,6 +494,7 @@ static int hid_filter_device_list(libusb_device **devs, ssize_t count, hid_devic
 //                    post("usage (page) = %d (%d)", report_desc[3], report_desc[1]);
                         }
                     }
+
                 } // claimed
 
 #ifdef DETACH_KERNEL_DRIVER
