@@ -2,12 +2,16 @@
 
 An USB HID external for PureData (PD) 
 
+*Note* the current version only outputs raw values as received from the HID -
+HID descriptor input item specifics (such as min/max, units, exponentials, etc)
+are not respected. This is not yet implemented in the underlaying [USB-HID-Report-Parser](https://github.com/tschiemer/USB-HID-Report-Parser/tree/usbhid_map).
+
 Built and tested on macos 10.15.7.
 Tested RPi 4 (5.10.17-v7l+), in principle works but is suboptimal.
 
 ![hid-example.pd](hid-example.pd.png)
 
-## Todos
+## Todosgit@gitlab.zhdk.ch:ptschiem/puredata-hid-external.git
 
 - [ ] Add output report support
 - [ ] Feature reports?
@@ -29,7 +33,7 @@ make -f Makefile.macos && make -f Makefile.macos install
 
 A bit more troublesome.. these instructions might not get you all the way, but should be a start.
 
-*NOTE* as it is, using libusb (in this external) on linux is somewhat invasive on USB devices at it might kernel
+*NOTE* as it is, using libusb (in this external) on linux is somewhat invasive on USB devices as kernel
 drivers might be detached for this to work. Using hidraw (as offered by hidapi) this seems to work without
 further problem, but this is something that remains to be done.
 
