@@ -5,7 +5,7 @@ HIDAPI_DIR=${CURDIR}/deps/hidapi
 HIDMAP_DIR=${CURDIR}/deps/USB-HID-Report-Parser
 
 cflags += -I${LIBUSB_DIR}/libusb -I${HIDAPI_DIR}/hidapi -I${HIDMAP_DIR}
-ldflags += -L${LIBUSB_DIR}/libusb -lusb -L${HIDAPI_DIR}/local-install/lib -lhidapi -L${HIDMAP_DIR} -lusbhid_map
+ldflags += -L${LIBUSB_DIR}/libusb -lusb -L${HIDAPI_DIR}/local-install/lib #-lhidapi -L${HIDMAP_DIR} #-lusbhid_map
 
 export PDDIR
 export PDLIBBUILDER_DIR
@@ -16,7 +16,7 @@ export cflags
 export ldflags
 
 
-all: libusb hidapi usbhid_map
+all: libusb hidapi #usbhid_map
 	$(MAKE) -C src/hid
 
 install:
@@ -26,7 +26,6 @@ clean:
 	$(MAKE) -C src/hid clean
 	$(MAKE) -C ${LIBUSB_DIR} clean
 	$(MAKE) -C ${HIDAPI_DIR} clean
-	$(MAKE) -C ${HIDMAP_DIR} clean
 
 
 ### libusbb
@@ -55,16 +54,3 @@ ${HIDAPI_DIR}/Makefile: ${HIDAPI_DIR}/configure
 
 ${HIDAPI_DIR}/configure:
 	cd ${HIDAPI_DIR}; ./bootstrap
-	
-	
-### usbhid_map
-
-# usbhid_map: ${HIDMAP_DIR}/libusbhid_map.a
-# 	$(MAKE) -C ${HIDMAP_DIR}
-
-# ${HIDMAP_DIR}/libusbhid_map.a: ${HIDMAP_DIR}/Makefile
-usbhid_map: ${HIDMAP_DIR}/Makefile
-	$(MAKE) -C ${HIDMAP_DIR}
-
-${HIDMAP_DIR}/Makefile:
-	cd ${HIDMAP_DIR}; cmake .

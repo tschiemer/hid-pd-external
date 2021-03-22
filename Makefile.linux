@@ -1,0 +1,26 @@
+PDLIBBUILDER_DIR=${CURDIR}/deps/pd-lib-builder
+LIBUSB_DIR=/usr/include/libusb-1.0
+HIDAPI_DIR=/usr/include/hidapi
+HIDMAP_DIR=${CURDIR}/deps/USB-HID-Report-Parser
+
+# using invasive detaching.... ahem.
+
+cflags += -I${LIBUSB_DIR} -I${HIDAPI_DIR} -I${HIDMAP_DIR} -DDETACH_KERNEL_DRIVER
+ldflags += -lusb-1.0 -lhidapi-libusb -L${HIDMAP_DIR} -lusbhid_map
+
+export PDDIR
+export PDLIBBUILDER_DIR
+export LIBUSB_DIR
+export HIDAPI_DIR
+export HIDMAP_DIR
+export cflags
+export ldflags
+
+all:
+	$(MAKE) -C src/hid
+
+install:
+	$(MAKE) -C src/hid install
+
+clean:
+	$(MAKE) -C src/hid clean

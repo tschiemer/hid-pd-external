@@ -1,9 +1,10 @@
 
 
 #include "m_pd.h"
-#include "libusb.h"
-#include "hidapi.h"
 #include "usbhid_map.h"
+
+#include <libusb.h>
+#include <hidapi.h>
 //#include "report_item.h"
 //#include "report_usage.h"
 
@@ -378,100 +379,128 @@ static int hid_filter_device_list(libusb_device **devs, ssize_t count, hid_devic
 
                 uint8_t interface_num = config->interface[k].altsetting[l].bInterfaceNumber;
 
-                uint8_t report_desc[256];
-                r = libusb_control_transfer(handle, LIBUSB_ENDPOINT_IN | LIBUSB_RECIPIENT_INTERFACE,
-                                            LIBUSB_REQUEST_GET_DESCRIPTOR, (LIBUSB_DT_REPORT << 8) | interface_num, 0,
-                                            report_desc, sizeof(report_desc), 5000);
-                if (r < 4) {
-                    error("control_transfer() fail for report descriptor (%04x:%04x): %d", desc.idVendor, desc.idProduct, r);
-                } else if (report_desc[0] != 0x05 || report_desc[2] != 0x09) {
-                    error("Notice: report descriptor not starting with usage page and usage bytes: %02x %02x %02x %02x",
-                          report_desc[0], report_desc[1], report_desc[2], report_desc[3]);
-                } else if ((usage_page != 0 && usage_page != report_desc[1]) ||
-                           (usage != 0 && usage != report_desc[3]) ||
-                           (serial != NULL && desc.iSerialNumber == 0)) {
-                    // filter out unwanted usages
-                    // ie, do nothing
+#ifdef DETACH_KERNEL_DRIVER
+                int detached = 0;
+                r = libusb_kernel_driver_active(handle, interface_num);
+                if (r == 1) {
+                    r = libusb_detach_kernel_driver(handle, interface_num);
+                    if (r < 0)
+                        error("Couldn't detach kernel driver, even though a kernel driver was attached");
+                    else
+                        detached = 1;
+                }
+#endif
+
+                r = libusb_claim_interface(handle, interface_num);
+                if (r < 0) {
+                    error("claim_interface(): %d", r);
+                } else {
+
+                    uint8_t report_desc[256];
+                    r = libusb_control_transfer(handle, LIBUSB_ENDPOINT_IN | LIBUSB_RECIPIENT_INTERFACE,
+                                                LIBUSB_REQUEST_GET_DESCRIPTOR, (LIBUSB_DT_REPORT << 8) | interface_num, 0,
+                                                report_desc, sizeof(report_desc), 5000);
+                    if (r < 4) {
+                        error("control_transfer() fail for report descriptor (%04x:%04x): %d", desc.idVendor, desc.idProduct, r);
+                    } else if (report_desc[0] != 0x05 || report_desc[2] != 0x09) {
+                        error("Notice: report descriptor not starting with usage page and usage bytes: %02x %02x %02x %02x",
+                              report_desc[0], report_desc[1], report_desc[2], report_desc[3]);
+                    } else if ((usage_page != 0 && usage_page != report_desc[1]) ||
+                               (usage != 0 && usage != report_desc[3]) ||
+                               (serial != NULL && desc.iSerialNumber == 0)) {
+                        // filter out unwanted usages
+                        // ie, do nothing
 //                } else if (o >= count) {
 //                    error("Too many HID interfaces, skipping device %04x:%04x usage %d %d", desc.idVendor,
 //                          desc.idProduct, report_desc[1], report_desc[3]);
-                } else {
-
-                    wchar_t * serial_wstring = NULL;
-                    char serial_cstring[256];
-
-
-                    if (desc.iSerialNumber > 0 && (serial_wstring = get_usb_wstring(handle, desc.iSerialNumber)) == NULL){
-                        error("failed to load (required) serial for device %04x:%04x", desc.idVendor, desc.idProduct);
-                    } else if (serial != NULL && wchar2char(serial_wstring, serial_cstring, sizeof(serial_cstring)) && strcmp(serial, serial_cstring) != 0){
-                        free(serial_wstring);
                     } else {
 
+                        wchar_t * serial_wstring = NULL;
+                        char serial_cstring[256];
 
-                        hid_device_t * hiddev = calloc(1, sizeof(hid_device_t) + r);
 
-                        hiddev->dev = dev;
-                        libusb_ref_device(dev); // increase reference count
+                        if (desc.iSerialNumber > 0 && (serial_wstring = get_usb_wstring(handle, desc.iSerialNumber)) == NULL){
+                            error("failed to load (required) serial for device %04x:%04x", desc.idVendor, desc.idProduct);
+                        } else if (serial != NULL && wchar2char(serial_wstring, serial_cstring, sizeof(serial_cstring)) && strcmp(serial, serial_cstring) != 0){
+                            free(serial_wstring);
+                        } else {
 
-                        memcpy(&hiddev->desc, &desc, sizeof(struct libusb_device_descriptor));
 
-                        // on macos causes a fault...
+                            hid_device_t * hiddev = calloc(1, sizeof(hid_device_t) + r);
+
+                            hiddev->dev = dev;
+                            libusb_ref_device(dev); // increase reference count
+
+                            memcpy(&hiddev->desc, &desc, sizeof(struct libusb_device_descriptor));
+
+                            // on macos causes a fault...
 //                    hiddev->config = config;
 //                    config = NULL;
 
-                        hiddev->interface_num = interface_num;
+                            hiddev->interface_num = interface_num;
 
-                        hiddev->report_desc_len = r;
-                        memcpy(hiddev->report_desc, report_desc, r);
+                            hiddev->report_desc_len = r;
+                            memcpy(hiddev->report_desc, report_desc, r);
 
-                        /* Serial Number */
-                        hiddev->serial_string = serial_wstring;
+                            /* Serial Number */
+                            hiddev->serial_string = serial_wstring;
 
-                        /* Manufacturer and Product strings */
-                        if (desc.iManufacturer > 0)
-                            hiddev->manufacturer_string =
-                                    get_usb_wstring(handle, desc.iManufacturer);
-                        if (desc.iProduct > 0)
-                            hiddev->product_string =
-                                    get_usb_wstring(handle, desc.iProduct);
+                            /* Manufacturer and Product strings */
+                            if (desc.iManufacturer > 0)
+                                hiddev->manufacturer_string =
+                                        get_usb_wstring(handle, desc.iManufacturer);
+                            if (desc.iProduct > 0)
+                                hiddev->product_string =
+                                        get_usb_wstring(handle, desc.iProduct);
 
 
-                        /* Find the INPUT and OUTPUT endpoints. An
-						   OUTPUT endpoint is not required. */
-                        for (int e = 0; e < config->interface[k].altsetting[l].bNumEndpoints; e++) {
-                            const struct libusb_endpoint_descriptor *ep = &config->interface[k].altsetting[l].endpoint[i];
+                            /* Find the INPUT and OUTPUT endpoints. An
+                               OUTPUT endpoint is not required. */
+                            for (int e = 0; e < config->interface[k].altsetting[l].bNumEndpoints; e++) {
+                                const struct libusb_endpoint_descriptor *ep = &config->interface[k].altsetting[l].endpoint[i];
 
-                            /* Determine the type and direction of this
-                               endpoint. */
-                            int is_interrupt =
-                                    (ep->bmAttributes & LIBUSB_TRANSFER_TYPE_MASK)
-                                    == LIBUSB_TRANSFER_TYPE_INTERRUPT;
-                            int is_output =
-                                    (ep->bEndpointAddress & LIBUSB_ENDPOINT_DIR_MASK)
-                                    == LIBUSB_ENDPOINT_OUT;
-                            int is_input =
-                                    (ep->bEndpointAddress & LIBUSB_ENDPOINT_DIR_MASK)
-                                    == LIBUSB_ENDPOINT_IN;
+                                /* Determine the type and direction of this
+                                   endpoint. */
+                                int is_interrupt =
+                                        (ep->bmAttributes & LIBUSB_TRANSFER_TYPE_MASK)
+                                        == LIBUSB_TRANSFER_TYPE_INTERRUPT;
+                                int is_output =
+                                        (ep->bEndpointAddress & LIBUSB_ENDPOINT_DIR_MASK)
+                                        == LIBUSB_ENDPOINT_OUT;
+                                int is_input =
+                                        (ep->bEndpointAddress & LIBUSB_ENDPOINT_DIR_MASK)
+                                        == LIBUSB_ENDPOINT_IN;
 
-                            /* Decide whether to use it for input or output. */
-                            if (hiddev->input_endpoint == 0 &&
-                                is_interrupt && is_input) {
-                                /* Use this endpoint for INPUT */
-                                hiddev->input_endpoint = ep->bEndpointAddress;
-                                hiddev->input_ep_max_packet_size = ep->wMaxPacketSize;
+                                /* Decide whether to use it for input or output. */
+                                if (hiddev->input_endpoint == 0 &&
+                                    is_interrupt && is_input) {
+                                    /* Use this endpoint for INPUT */
+                                    hiddev->input_endpoint = ep->bEndpointAddress;
+                                    hiddev->input_ep_max_packet_size = ep->wMaxPacketSize;
+                                }
+                                if (hiddev->output_endpoint == 0 &&
+                                    is_interrupt && is_output) {
+                                    /* Use this endpoint for OUTPUT */
+                                    hiddev->output_endpoint = ep->bEndpointAddress;
+                                }
                             }
-                            if (hiddev->output_endpoint == 0 &&
-                                is_interrupt && is_output) {
-                                /* Use this endpoint for OUTPUT */
-                                hiddev->output_endpoint = ep->bEndpointAddress;
-                            }
-                        }
 
-                        (*hiddevs)[o++] = hiddev;
+                            (*hiddevs)[o++] = hiddev;
 
 //                    post("usage (page) = %d (%d)", report_desc[3], report_desc[1]);
+                        }
                     }
+                } // claimed
+
+#ifdef DETACH_KERNEL_DRIVER
+                /* Re-attach kernel driver if necessary. */
+                if (detached) {
+                    r = libusb_attach_kernel_driver(handle, interface_num);
+                    if (r < 0)
+                        error("Couldn't re-attach kernel driver.\n");
                 }
+#endif
+
 
                 libusb_close(handle);
             }
