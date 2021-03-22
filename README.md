@@ -5,6 +5,8 @@ An USB HID external for PureData (PD)
 Built and tested on macos 10.15.7.
 Tested RPi 4 (5.10.17-v7l+), in principle works but is suboptimal.
 
+![hid-example.pd](hid-example.pd.png)
+
 ## Todos
 
 - [ ] Add output report support
